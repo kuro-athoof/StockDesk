@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function role() { return userDoc().role; }
+    function isActive() { return userDoc().active == true; }
+
+    function isAdmin() { return signedIn() && isActive() && role() == 'admin'; }
+    function isPurchaseMgr() { return signedIn() && isActive() && role() == 'purchase_manager'; }
+    function isShopMgr() { return signedIn() && isActive() && role() == 'shop_manager'; }
+    function isWarehouse() { return signedIn() && isActive() && role() == 'warehouse_staff'; }
+    function isAuditor() { return signedIn() && isActive() && role() == 'auditor'; }
+
+    // anyone signed-in & active can read most operational data
+    function canRead() { return signedIn() && isActive(); }
+
+    // ---- Users: only admin manages; users can read own doc ----
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin() || isAuditor());
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---- Reference data: admin/purchase manage; all read ----
+    match /shops/{id}        { allow read: if canRead(); allow write: if isAdmin(); }
+    match /units/{id}        { allow read: if canRead(); allow write: if isAdmin(); }
+    match /locations/{id}    { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
+    match /suppliers/{id}    { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
+    match /countryRates/{id} { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
+    match /settings/{id}     { allow read: if canRead(); allow write: if isAdmin(); }
+
+    // ---- Products & variants: admin/purchase manage ----
+    match /products/{id} {
+      allow read: if canRead();
+      allow write: if isAdmin() || isPurchaseMgr();
+    }
+    match /variants/{id} {
+      allow read: if canRead();
+      allow write: if isAdmin() || isPurchaseMgr();
+    }
+
+    // ---- Balances: read by all; writes ONLY via trusted transaction paths ----
+    // Writes are allowed for roles that move stock; the app routes every change
+    // through applyMovement(). Auditor & shop_manager cannot write balances directly.
+    match /balances/{id} {
+      allow read: if canRead();
+      allow write: if isAdmin() || isPurchaseMgr() || isWarehouse();
+    }
+
+    // ---- Audit logs: append-only, never edited or deleted ----
+    match /auditLogs/{id} {
+      allow read: if canRead();
+      allow create: if isAdmin() || isPurchaseMgr() || isWarehouse();
+      allow update, delete: if false; // immutable
+    }
+
+    // ---- Receivings ----
+    match /receivings/{id} {
+      allow read: if canRead();
+      allow create, update: if isAdmin() || isPurchaseMgr() || isWarehouse();
+      allow delete: if false; // history preserved
+    }
+
+    // ---- Transfers ----
+    match /transfers/{id} {
+      allow read: if canRead();
+      allow create, update: if isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr();
+      allow delete: if false;
+    }
+
+    // ---- Stock counts ----
+    match /stockCounts/{id} {
+      allow read: if canRead();
+      allow create, update: if isAdmin() || isPurchaseMgr() || isWarehouse();
+      allow delete: if false;
+    }
+
+    // ---- Notifications ----
+    match /notifications/{id} {
+      allow read: if canRead();
+      allow create, update: if isAdmin() || isPurchaseMgr();
+      allow delete: if isAdmin();
+    }
+  }
+}

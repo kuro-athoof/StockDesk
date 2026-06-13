@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  background: #f6f7f9;
+  color: #0f1729;
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+
+@layer components {
+  .card {
+    @apply bg-white rounded-xl border border-ink-100 shadow-card;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary { @apply btn bg-teal-500 text-white hover:bg-teal-600; }
+  .btn-ghost { @apply btn bg-ink-50 text-ink-700 hover:bg-ink-100; }
+  .btn-danger { @apply btn bg-red-50 text-red-600 hover:bg-red-100; }
+  .input {
+    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm
+      outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-100;
+  }
+  .label { @apply block text-xs font-semibold text-ink-500 mb-1; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+}
