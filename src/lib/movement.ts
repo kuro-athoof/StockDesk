@@ -88,13 +88,13 @@ export async function applyMovement(input: MovementInput): Promise<number> {
       locationId: locationId ?? (balSnap.exists() ? (balSnap.data() as Balance).locationId : undefined),
       updatedAt: Date.now(),
     };
-    // strip undefined for Firestore
+    // strip undefined for Firestore (write the sanitized record, not the original)
     const balanceRecord = balanceData as unknown as Record<string, unknown>;
     Object.keys(balanceRecord).forEach(
       (k) => balanceRecord[k] === undefined && delete balanceRecord[k]
     );
 
-    tx.set(balRef, balanceData);
+    tx.set(balRef, balanceRecord);
 
     tx.set(auditRef, {
       timestamp: Date.now(),

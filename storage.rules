@@ -1,0 +1,17 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+
+    // Product/design/booklet images and barcode PDFs.
+    // Any signed-in user can read; only signed-in users can write (tighten
+    // per-role later if needed). Images capped at 10MB.
+    match /{folder}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn()
+                   && request.resource.size < 10 * 1024 * 1024
+                   && (request.resource.contentType.matches('image/.*')
+                       || request.resource.contentType == 'application/pdf');
+    }
+  }
+}

@@ -3,21 +3,21 @@ import { useStore } from '../context/StoreContext';
 import { PageHeader, Badge } from '../components/ui';
 import { generateNotifications } from '../lib/notifications';
 
-type ReportKey = 'by_shop' | 'low' | 'out' | 'non_moving' | 'color_map' | 'recent';
+type ReportKey = 'by_owner' | 'low' | 'depleted' | 'non_moving' | 'color_map' | 'transfer_out';
 
 const REPORTS: { key: ReportKey; label: string }[] = [
-  { key: 'by_shop', label: 'Stock by Shop' },
-  { key: 'low', label: 'Low Stock' },
-  { key: 'out', label: 'Out of Stock' },
+  { key: 'by_owner', label: 'Godown Stock by Owner' },
+  { key: 'low', label: 'Low in Godown' },
+  { key: 'depleted', label: 'Depleted' },
   { key: 'non_moving', label: 'Non-Moving / Dead' },
   { key: 'color_map', label: 'Supplier Color Mapping' },
-  { key: 'recent', label: 'Recent Transfers / Adjustments' },
+  { key: 'transfer_out', label: 'Transfer Out History' },
 ];
 
 export function Reports() {
   const store = useStore();
   const { scopedBalances, variants, products, audit, settings, shops, visibleShopIds, shopName, productName, supplierName } = store;
-  const [active, setActive] = useState<ReportKey>('by_shop');
+  const [active, setActive] = useState<ReportKey>('by_owner');
 
   const visibleShops = shops.filter((s) => visibleShopIds.includes(s.id));
 
@@ -32,7 +32,7 @@ export function Reports() {
     <div>
       <PageHeader
         title="Reports"
-        subtitle="Live tables from current demo data"
+        subtitle="Godown inventory reports"
         action={
           <div className="flex gap-2">
             <button className="btn-ghost" onClick={() => mockExport('Excel')}>Export Excel</button>
@@ -56,8 +56,8 @@ export function Reports() {
       </div>
 
       <div className="card overflow-x-auto">
-        {active === 'by_shop' && (
-          <Table head={['Shop', 'Variants', 'Total qty', 'Rolls']}>
+        {active === 'by_owner' && (
+          <Table head={['Owner', 'Variants', 'Godown qty', 'Godown rolls']}>
             {visibleShops.map((s) => {
               const bs = scopedBalances.filter((b) => b.ownerShopId === s.id);
               const qty = bs.reduce((x, b) => x + b.quantity, 0);
@@ -68,7 +68,7 @@ export function Reports() {
         )}
 
         {active === 'low' && (
-          <Table head={['Product', 'Variant', 'Shop', 'Qty', 'Unit']}>
+          <Table head={['Product', 'Variant', 'Owner', 'Godown qty', 'Unit']}>
             {scopedBalances.filter((b) => b.quantity > 0 && b.quantity <= settings.lowStockThreshold).map((b) => {
               const v = variants.find((x) => x.id === b.variantId);
               return <tr key={b.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50"><Td bold>{productName(b.productId)}</Td><Td>{v?.label}</Td><Td>{shopName(b.ownerShopId)}</Td><Td>{b.quantity}</Td><Td>{b.unit}</Td></tr>;
@@ -76,11 +76,11 @@ export function Reports() {
           </Table>
         )}
 
-        {active === 'out' && (
-          <Table head={['Product', 'Variant', 'Shop', 'Status']}>
+        {active === 'depleted' && (
+          <Table head={['Product', 'Variant', 'Owner', 'Status']}>
             {scopedBalances.filter((b) => b.quantity <= 0).map((b) => {
               const v = variants.find((x) => x.id === b.variantId);
-              return <tr key={b.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50"><Td bold>{productName(b.productId)}</Td><Td>{v?.label}</Td><Td>{shopName(b.ownerShopId)}</Td><Td><Badge tone="out">Out</Badge></Td></tr>;
+              return <tr key={b.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50"><Td bold>{productName(b.productId)}</Td><Td>{v?.label}</Td><Td>{shopName(b.ownerShopId)}</Td><Td><Badge tone="out">Depleted</Badge></Td></tr>;
             })}
           </Table>
         )}
@@ -102,15 +102,14 @@ export function Reports() {
           </Table>
         )}
 
-        {active === 'recent' && (
-          <Table head={['Time', 'Action', 'Product', 'Shop', 'Change', 'User']}>
-            {audit.filter((a) => visibleShopIds.includes(a.ownerShopId) && (a.action === 'OWNERSHIP_TRANSFER' || a.action === 'INTERNAL_MOVEMENT' || a.action === 'ADJUSTMENT')).sort((a, b) => b.timestamp - a.timestamp).map((a) => (
+        {active === 'transfer_out' && (
+          <Table head={['Time', 'Product', 'Owner', 'Qty out', 'User']}>
+            {audit.filter((a) => visibleShopIds.includes(a.ownerShopId) && a.action === 'TRANSFER_OUT').sort((a, b) => b.timestamp - a.timestamp).map((a) => (
               <tr key={a.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50">
                 <Td>{new Date(a.timestamp).toLocaleDateString()}</Td>
-                <Td>{a.action.replace(/_/g, ' ')}</Td>
                 <Td bold>{productName(a.productId)}</Td>
                 <Td>{shopName(a.ownerShopId)}</Td>
-                <Td>{a.qtyChanged > 0 ? '+' : ''}{a.qtyChanged || '—'}</Td>
+                <Td>{Math.abs(a.qtyChanged)}</Td>
                 <Td>{a.userName}</Td>
               </tr>
             ))}

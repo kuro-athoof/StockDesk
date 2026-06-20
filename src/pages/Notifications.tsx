@@ -4,8 +4,8 @@ import { PageHeader, Badge, EmptyState } from '../components/ui';
 import { generateNotifications, type NotifKind } from '../lib/notifications';
 
 const KIND_LABELS: Record<NotifKind | 'all', string> = {
-  all: 'All', out: 'Out of stock', low: 'Low stock',
-  non_moving: 'Non-moving', dead: 'Dead stock', pending: 'Pending',
+  all: 'All', out: 'Depleted', low: 'Low in godown',
+  non_moving: 'Non-moving', dead: 'Dead', pending: 'Pending',
 };
 
 const TONE: Record<NotifKind, 'out' | 'low' | 'neutral' | 'info'> = {

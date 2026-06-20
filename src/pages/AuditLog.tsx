@@ -4,12 +4,12 @@ import { PageHeader, Badge } from '../components/ui';
 import type { MovementAction } from '../types';
 
 const ACTIONS: MovementAction[] = [
-  'RECEIVE', 'INTERNAL_MOVEMENT', 'OWNERSHIP_TRANSFER', 'ADJUSTMENT',
+  'RECEIVE', 'INTERNAL_MOVEMENT', 'OWNERSHIP_TRANSFER', 'TRANSFER_OUT', 'ADJUSTMENT',
   'STOCK_COUNT_CORRECTION', 'NEGATIVE_OVERRIDE',
 ];
 
 const ACTION_TONE: Record<string, 'ok' | 'info' | 'low' | 'out' | 'neutral'> = {
-  RECEIVE: 'ok', INTERNAL_MOVEMENT: 'info', OWNERSHIP_TRANSFER: 'info',
+  RECEIVE: 'ok', INTERNAL_MOVEMENT: 'info', OWNERSHIP_TRANSFER: 'info', TRANSFER_OUT: 'out',
   ADJUSTMENT: 'low', STOCK_COUNT_CORRECTION: 'low', NEGATIVE_OVERRIDE: 'out',
 };
 

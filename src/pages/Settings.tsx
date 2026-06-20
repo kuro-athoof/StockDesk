@@ -37,9 +37,10 @@ export function Settings() {
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
-              <label className="label">Low stock threshold</label>
+              <label className="label">Low godown qty highlight</label>
               <input type="number" className="input" value={settings.lowStockThreshold}
                 onChange={(e) => updateSettings({ lowStockThreshold: parseInt(e.target.value) || 0 })} />
+              <p className="mt-1 text-[11px] text-ink-400">Highlights near-depleted godown lines. Not a refill trigger.</p>
             </div>
             <div>
               <label className="label">Non-moving after (days)</label>

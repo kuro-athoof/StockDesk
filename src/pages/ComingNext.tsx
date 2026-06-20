@@ -39,12 +39,12 @@ function AdjustStockTool() {
   const variant = variants.find((v) => v.id === variantId)!;
   const bal = balanceOf(variantId, shopId);
 
-  const run = () => {
+  const run = async () => {
     const n = parseFloat(delta);
     if (Number.isNaN(n)) { setMsg({ tone: 'out', text: 'Enter a valid number' }); return; }
-    const res = applyLocalMovement({
-      variant, ownerShopId: shopId, qtyChanged: n, unit: bal?.unit ?? variant.productType === 'general' ? 'Piece' : 'Meter',
-      action: 'ADJUSTMENT', remarks: 'Manual adjustment (demo)',
+    const res = await applyLocalMovement({
+      variant, ownerShopId: shopId, qtyChanged: n, unit: bal?.unit ?? (variant.productType === 'general' ? 'Piece' : 'Meter'),
+      action: 'ADJUSTMENT', remarks: 'Manual adjustment',
     });
     if (res.ok) setMsg({ tone: 'ok', text: `Applied. New balance recorded.` });
     else if (res.needsOverride) setMsg({ tone: 'out', text: `Blocked: ${res.error}. A manager can override.` });

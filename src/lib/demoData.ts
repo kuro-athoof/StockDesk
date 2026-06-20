@@ -24,10 +24,11 @@ export const DEMO_SHOPS: Shop[] = [
   { id: 'shop_sindhitha', name: 'Sindhitha', active: true, createdAt: now },
 ];
 
+const MUH_PER: Record<string, number> = { Meter: 2.18, Yard: 2, Muh: 1 };
 export const DEMO_UNITS: Unit[] = [
   'Meter', 'Yard', 'Muh', 'Piece', 'Roll', 'Box', 'Packet', 'Dozen',
   'Set', 'Bottle', 'Carton', 'Pair', 'Kg', 'Gram',
-].map((code) => ({ id: `unit_${code.toLowerCase()}`, code, custom: false }));
+].map((code) => ({ id: `unit_${code.toLowerCase()}`, code, custom: false, muhPerUnit: MUH_PER[code] }));
 
 export const DEMO_LOCATIONS: StockLocation[] = [
   { id: 'loc_a3', godown: 'Main Godown', rack: 'Rack A', shelf: 'Shelf 3', label: 'Main Godown > Rack A > Shelf 3' },
@@ -51,20 +52,20 @@ export const DEMO_RATES: CountryRate[] = [
 ];
 
 export const DEMO_PRODUCTS: Product[] = [
-  { id: 'p_aurora', type: 'plain_fabric', name: 'Aurora Crush', category: 'Crush', supplierId: 'sup_dubai', defaultUnit: 'Meter', notes: 'Best seller', createdAt: now, updatedAt: now },
-  { id: 'p_silk', type: 'plain_fabric', name: 'Silk Luxe', category: 'Silk', supplierId: 'sup_india', defaultUnit: 'Meter', createdAt: now, updatedAt: now },
-  { id: 'p_ity', type: 'design_fabric', name: 'ITY Design', supplierId: 'sup_bkk', collection: 'ITY 2025', defaultUnit: 'Meter', createdAt: now, updatedAt: now },
+  { id: 'p_aurora', type: 'fabric', name: 'Aurora Crush', category: 'Crush', supplierId: 'sup_dubai', defaultUnit: 'Meter', notes: 'Best seller', createdAt: now, updatedAt: now },
+  { id: 'p_silk', type: 'fabric', name: 'Silk Luxe', category: 'Silk', supplierId: 'sup_india', defaultUnit: 'Meter', createdAt: now, updatedAt: now },
+  { id: 'p_ity', type: 'fabric', name: 'ITY Design', supplierId: 'sup_bkk', collection: 'ITY 2025', defaultUnit: 'Meter', createdAt: now, updatedAt: now },
   { id: 'p_perfume', type: 'general', name: 'Oud Royale Perfume', category: 'Perfume', supplierId: 'sup_dubai', defaultUnit: 'Bottle', createdAt: now, updatedAt: now },
   { id: 'p_shawl', type: 'general', name: 'Pashmina Shawl', category: 'Shawls', supplierId: 'sup_india', defaultUnit: 'Piece', createdAt: now, updatedAt: now },
 ];
 
 export const DEMO_VARIANTS: Variant[] = [
-  { id: 'v_aurora_1', productId: 'p_aurora', productType: 'plain_fabric', label: 'Color #1', ourColorNumber: '1', supplierColorNumber: 'AC-1', barcode: '880001', metersPerRoll: 45, createdAt: now },
-  { id: 'v_aurora_4', productId: 'p_aurora', productType: 'plain_fabric', label: 'Color #4', ourColorNumber: '4', supplierColorNumber: 'AC-4', barcode: '880004', metersPerRoll: 45, createdAt: now },
-  { id: 'v_aurora_7', productId: 'p_aurora', productType: 'plain_fabric', label: 'Color #7', ourColorNumber: '7', supplierColorNumber: 'AC-7', barcode: '880007', metersPerRoll: 45, createdAt: now },
-  { id: 'v_silk_2', productId: 'p_silk', productType: 'plain_fabric', label: 'Color #2', ourColorNumber: '2', supplierColorNumber: 'SL-2', barcode: '881002', metersPerRoll: 50, createdAt: now },
-  { id: 'v_ity_d001', productId: 'p_ity', productType: 'design_fabric', label: 'D001', designNumber: 'D001', barcode: '882001', metersPerRoll: 40, createdAt: now },
-  { id: 'v_ity_d002', productId: 'p_ity', productType: 'design_fabric', label: 'D002', designNumber: 'D002', barcode: '882002', metersPerRoll: 40, createdAt: now },
+  { id: 'v_aurora_1', productId: 'p_aurora', productType: 'fabric', label: 'Color #01', ourColorNumber: '1', supplierColorNumber: 'AC-1', barcode: 'AUR-C01', rollQty: 6, qtyPerRoll: 25, uom: 'Yard', totalQty: 150, cost: 19.2, totalValue: 2880, lastReceiveDate: now - 86400_000, createdAt: now },
+  { id: 'v_aurora_4', productId: 'p_aurora', productType: 'fabric', label: 'Color #04', ourColorNumber: '4', supplierColorNumber: 'AC-4', barcode: 'AUR-C04', rollQty: 8, qtyPerRoll: 25, uom: 'Yard', totalQty: 200, cost: 19.2, totalValue: 3840, lastReceiveDate: now - 86400_000, createdAt: now },
+  { id: 'v_aurora_7', productId: 'p_aurora', productType: 'fabric', label: 'Color #07', ourColorNumber: '7', supplierColorNumber: 'AC-7', barcode: 'AUR-C07', rollQty: 4, qtyPerRoll: 25, uom: 'Yard', totalQty: 100, cost: 19.2, totalValue: 1920, lastReceiveDate: now - 172800_000, createdAt: now },
+  { id: 'v_silk_2', productId: 'p_silk', productType: 'fabric', label: 'Color #02', ourColorNumber: '2', supplierColorNumber: 'SL-2', barcode: 'SLK-C02', rollQty: 5, qtyPerRoll: 30, uom: 'Yard', totalQty: 150, cost: 14.4, totalValue: 2160, lastReceiveDate: now - 259200_000, createdAt: now },
+  { id: 'v_ity_d001', productId: 'p_ity', productType: 'fabric', label: 'D001', designNumber: 'D001', barcode: 'ITY-D001', rollQty: 4, qtyPerRoll: 40, uom: 'Yard', totalQty: 160, cost: 10.8, totalValue: 1728, lastReceiveDate: now - 345600_000, createdAt: now },
+  { id: 'v_ity_d002', productId: 'p_ity', productType: 'fabric', label: 'D002', designNumber: 'D002', barcode: 'ITY-D002', rollQty: 0, qtyPerRoll: 40, uom: 'Yard', totalQty: 0, cost: 10.8, totalValue: 0, createdAt: now },
   { id: 'v_perfume', productId: 'p_perfume', productType: 'general', label: 'Oud Royale 100ml', barcode: '883001', createdAt: now },
   { id: 'v_shawl', productId: 'p_shawl', productType: 'general', label: 'Pashmina Grey', barcode: '884001', createdAt: now },
 ];
@@ -84,6 +85,7 @@ export const DEMO_BALANCES: Balance[] = [
   mkBal('v_perfume', 'p_perfume', 'shop_flora', 24, 'Bottle', undefined, 'loc_c2'),
   mkBal('v_shawl', 'p_shawl', 'shop_sindhitha', 3, 'Piece', undefined, 'loc_c2'), // low stock
 ];
+
 
 export const DEMO_AUDIT: AuditLog[] = [
   { id: 'a1', timestamp: now - 3600_000, userId: 'u_purch', userName: 'Purchase Manager', action: 'RECEIVE', productId: 'p_aurora', variantId: 'v_aurora_1', ownerShopId: 'shop_flora', qtyBefore: 0, qtyChanged: 540, qtyAfter: 540, remarks: 'Invoice INV-2025-088' },

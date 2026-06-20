@@ -19,19 +19,30 @@ export interface Shop {
   createdAt: number;
 }
 
-export type ProductType = 'plain_fabric' | 'design_fabric' | 'general';
+export type ProductType = 'fabric' | 'general';
 
 export interface Product {
   id: string;
   type: ProductType;
   name: string;
   category?: string;
+  productTypeLabel?: string;   // admin-defined product type (free, beyond the 3 base kinds)
   supplierId?: string;
   productImage?: string;
-  bookletImage?: string;     // sample/design booklet reference
+  bookletImage?: string;     // optional reference attachment (not required)
   notes?: string;
   collection?: string;        // design fabrics (e.g. ITY 2025)
   defaultUnit: string;        // unit code
+  // Finalized professional fields
+  width?: string;
+  gsm?: string;
+  composition?: string;
+  quality?: string;           // quality / fabric type
+  season?: string;
+  sampleReference?: string;   // sample book number
+  samplePage?: string;        // page number in the sample book
+  referenceImage?: string;    // ONE optional reference image (URL) — not primary ID
+  active?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -44,12 +55,26 @@ export interface Variant {
   label: string;              // color #, design #, or item name
   ourColorNumber?: string;
   supplierColorNumber?: string;
-  designNumber?: string;
-  designImage?: string;
+  colorName?: string;
+  colorFamily?: string;
+  colorCode?: string;         // HEX code, optional
+  designNumber?: string;      // design code
+  designImage?: string;       // optional, not required
+  collection?: string;        // collection / season
   barcode?: string;
-  // rolls<->meters reconciliation (fabrics only). metersPerRoll is a NOMINAL hint;
-  // meter balance is the source of truth. rolls are informational.
-  metersPerRoll?: number;
+  barcodeSource?: 'generated' | 'supplier' | 'manual'; // provenance of the barcode
+  active?: boolean;
+  // --- Aggregate fabric stock (NO individual roll records) ---
+  // The warehouse tracks roll count + quantity only, stored directly on the variant.
+  rollQty?: number;          // number of rolls in the godown
+  qtyPerRoll?: number;       // nominal length per roll (e.g. 25)
+  uom?: string;              // stock unit (Yard, Meter…)
+  totalQty?: number;         // rollQty × qtyPerRoll (or accumulated received qty)
+  cost?: number;             // latest landed cost per UOM (FOB × rate)
+  totalValue?: number;       // totalQty × cost
+  lastReceiveDate?: number;  // last receiving timestamp
+  lastTransferDate?: number; // last transfer-out timestamp
+  metersPerRoll?: number;    // legacy nominal hint (kept for compatibility)
   createdAt: number;
 }
 
@@ -66,11 +91,21 @@ export interface Balance {
   updatedAt: number;
 }
 
+// ============ Simplified fabric stock model ============
+//
+// We do NOT track individual rolls. The warehouse only needs roll count + total
+// quantity, stored as aggregate fields on the Variant (see Variant above).
+// General inventory stays quantity-based on the balance.
+
 export interface Unit {
   id: string;
   code: string;               // Meter, Yard, Muh, Piece, Roll, Box...
   custom: boolean;
+  muhPerUnit?: number;        // how many Muh in 1 of this unit (e.g. Yard = 2). Muh itself = 1.
 }
+
+// Company base inventory unit. All costing is ultimately stored as Cost Per Muh.
+export const BASE_UNIT = 'Muh';
 
 export interface StockLocation {
   id: string;
@@ -109,6 +144,8 @@ export type MovementAction =
   | 'RECEIVE'
   | 'INTERNAL_MOVEMENT'
   | 'OWNERSHIP_TRANSFER'
+  | 'TRANSFER_OUT'
+  | 'DAMAGE'
   | 'ADJUSTMENT'
   | 'STOCK_COUNT_CORRECTION'
   | 'NEGATIVE_OVERRIDE';
@@ -139,7 +176,149 @@ export const ROLE_LABELS: Record<Role, string> = {
 };
 
 export const PRODUCT_TYPE_LABELS: Record<ProductType, string> = {
-  plain_fabric: 'Plain Fabric',
-  design_fabric: 'Design Fabric',
+  fabric: 'Fabric',
   general: 'General Inventory',
 };
+
+// ============ Stock Count ============
+
+export type CountStatus = 'open' | 'submitted' | 'approved' | 'cancelled';
+
+export interface CountLine {
+  id: string;
+  barcode?: string;
+  productId: string;
+  variantId: string;
+  unit: string;
+  expectedRolls?: number;
+  actualRolls?: number;
+  expectedQuantity: number;
+  actualQuantity: number;
+  variance: number;          // actualQuantity - expectedQuantity
+  reason?: string;
+}
+
+export interface StockCount {
+  id: string;
+  countNo: string;           // CNT-0001
+  shopId: string;
+  countedBy: string;
+  date: string;
+  status: CountStatus;
+  lines: CountLine[];
+  createdAt: number;
+  submittedAt?: number;
+  approvedAt?: number;
+  approvedBy?: string;
+}
+
+// ============ Cost history (kept permanently) ============
+
+export interface CostHistory {
+  id: string;
+  variantId: string;
+  ownerShopId: string;
+  fobValue: number;           // FOB amount in supplier currency
+  fobUnit: string;            // unit FOB is quoted in
+  exchangeRate: number;       // country rate (supplier currency → MVR)
+  stockUom: string;           // unit inventory is held in
+  cost: number;               // FOB × rate = landed cost per UOM
+  receivingNo: string;
+  timestamp: number;
+  userId: string;
+}
+
+export const MOVE_REASON_LABELS: Record<MoveReason, string> = {
+  shop_refill: 'Shop Refill',
+  customer_order: 'Customer Order',
+  stock_transfer: 'Stock Transfer To Another Shop',
+  damaged_goods: 'Damaged Goods',
+};
+
+// ============ Receiving ============
+
+export type ReceivingStatus = 'draft' | 'posted' | 'cancelled';
+
+export interface ReceivingLine {
+  id: string;
+  barcode?: string;        // variant barcode (e.g. AUR-C01)
+  productId: string;
+  variantId: string;
+  category?: string;
+  // Aggregate quantities (NO individual roll records)
+  rollQty?: number;        // number of rolls received (fabric)
+  qtyPerRoll?: number;     // length per roll (fabric)
+  quantity: number;        // total qty in stock UOM
+  stockUom: string;        // unit inventory is held in (Yard, Meter, PCS…)
+  // Costing: Cost = (FOB ÷ FOB Unit) × Country Rate
+  fobValue?: number;       // FOB amount in supplier currency
+  fobUomUnit?: number;     // how many stock UOM this FOB covers (e.g. 10 → "30 AED per 10 Yards")
+  fobUnit?: string;        // FOB UOM dropdown (Yard, Meter, Dozen, PCS…)
+  exchangeRate?: number;   // country rate (from header)
+  cost?: number;           // (FOB ÷ FOB Unit) × header rate
+  totalCost?: number;      // quantity × cost
+  remarks?: string;
+  costChanged?: boolean;   // true if cost differs from last receiving of this variant
+  // Note: prevCost and exchangeRate are NOT stored — rate comes from header.country only.
+}
+
+export interface Receiving {
+  id: string;
+  receivingNo: string;     // auto, e.g. RCV-0001
+  ownerShopId: string;
+  supplierId?: string;
+  country?: string;
+  invoiceDate?: string;
+  invoiceNumber?: string;
+  notes?: string;          // receive location removed — everything enters the godown
+  status: ReceivingStatus;
+  lines: ReceivingLine[];
+  createdAt: number;
+  createdBy: string;
+  postedAt?: number;
+  postedBy?: string;
+}
+
+// ============ Transfers ============
+
+export type TransferType = 'internal' | 'ownership' | 'transfer_out';
+export type TransferStatus = 'draft' | 'sent' | 'received' | 'cancelled';
+
+// Roll movement reasons (only these four).
+export type MoveReason =
+  | 'shop_refill' | 'customer_order' | 'stock_transfer' | 'damaged_goods';
+
+export interface TransferLine {
+  id: string;
+  barcode?: string;        // variant barcode
+  productId: string;
+  variantId: string;
+  unit: string;
+  rollQty?: number;        // rolls transferred out (fabric)
+  quantity: number;        // total quantity transferred
+  cost?: number;           // cost snapshot per UOM
+  totalCostValue?: number; // quantity × cost
+  remarks?: string;
+}
+
+export interface Transfer {
+  id: string;
+  transferNo: string;      // auto, e.g. MOV-0001
+  type: TransferType;
+  reason?: MoveReason;
+  fromShopId: string;
+  toShopId: string;        // == fromShopId for internal movements
+  fromLocationId?: string;
+  toLocationId?: string;
+  preparedBy: string;
+  receivedBy?: string;
+  notes?: string;
+  status: TransferStatus;
+  lines: TransferLine[];
+  totalCostValue?: number; // sum for ownership transfers
+  createdAt: number;
+  sentAt?: number;
+  receivedAt?: number;
+  approvedBy?: string;     // ownership transfers require manager approval
+  overrideReason?: string; // mandatory when a manager overrides negative stock
+}

@@ -66,7 +66,7 @@ export function BarcodeLookup() {
                     <div key={b.id} className="rounded-lg bg-ink-50 p-3">
                       <div className="text-xs font-semibold text-ink-400">{shopName(b.ownerShopId)}</div>
                       <div className="mt-1 text-lg font-bold text-ink-900">{b.quantity} <span className="text-xs font-normal text-ink-400">{b.unit}</span></div>
-                      {b.rollCount != null && <div className="text-xs text-ink-400">{b.rollCount} rolls</div>}
+                      {b.rollCount != null && b.rollCount > 0 && <div className="text-xs text-ink-400">{b.rollCount} PCS</div>}
                       <div className="mt-1 text-[11px] text-ink-400">{loc?.label ?? 'No location'}</div>
                     </div>
                   );

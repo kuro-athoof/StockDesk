@@ -22,6 +22,8 @@ export function Stock() {
         const v = variants.find((x) => x.id === b.variantId);
         const p = products.find((x) => x.id === b.productId);
         const loc = locations.find((l) => l.id === b.locationId);
+        // P3: stock_balances is the single operational source of truth for qty.
+        // Always use b.quantity and b.rollCount — never mix in variant.totalQty.
         return { b, v, p, locLabel: loc?.label ?? '—' };
       })
       .filter(({ p }) => catFilter === 'all' || p?.category === catFilter)
@@ -44,7 +46,7 @@ export function Stock() {
 
   return (
     <div>
-      <PageHeader title="Stock" subtitle="Live balances by owner shop and location" />
+      <PageHeader title="Godown Stock" subtitle="Stock held in the godown, by owner and location" />
 
       <div className="mb-4 flex flex-wrap gap-2">
         <select className="input max-w-[150px]" value={shopFilter} onChange={(e) => setShopFilter(e.target.value)}>
@@ -59,11 +61,11 @@ export function Stock() {
           <option value="all">All suppliers</option>
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <select className="input max-w-[140px]" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
-          <option value="all">All status</option>
-          <option value="low">Low only</option>
-          <option value="out">Out only</option>
-          <option value="ok">Healthy only</option>
+        <select className="input max-w-[160px]" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
+          <option value="all">All quantities</option>
+          <option value="low">Low in godown</option>
+          <option value="out">Depleted</option>
+          <option value="ok">In stock</option>
         </select>
         <input className="input max-w-xs" placeholder="Search variant / barcode…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
@@ -79,7 +81,7 @@ export function Stock() {
               <th className="px-4 py-3">Owner</th>
               <th className="px-4 py-3">Location</th>
               <th className="px-4 py-3">Barcode</th>
-              <th className="px-4 py-3 text-right">Rolls</th>
+              <th className="px-4 py-3 text-right">PCS</th>
               <th className="px-4 py-3 text-right">Balance</th>
               <th className="px-4 py-3">Status</th>
             </tr>
@@ -98,7 +100,7 @@ export function Stock() {
                 <td className="px-4 py-3 text-right text-ink-600">{b.rollCount ?? '—'}</td>
                 <td className="px-4 py-3 text-right font-bold text-ink-900">{b.quantity} <span className="text-xs font-normal text-ink-400">{b.unit}</span></td>
                 <td className="px-4 py-3">
-                  <Badge tone={tone(b.quantity)}>{b.quantity <= 0 ? 'Out' : b.quantity <= settings.lowStockThreshold ? 'Low' : 'OK'}</Badge>
+                  <Badge tone={tone(b.quantity)}>{b.quantity <= 0 ? 'Depleted' : b.quantity <= settings.lowStockThreshold ? 'Low' : 'In stock'}</Badge>
                 </td>
               </tr>
             ))}

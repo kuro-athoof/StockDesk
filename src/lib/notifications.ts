@@ -44,13 +44,13 @@ export function generateNotifications(
     const where = shopNameFn(b.ownerShopId);
 
     if (b.quantity <= 0) {
-      out.push({ id: `out_${b.id}`, kind: 'out', severity: 'high', shopId: b.ownerShopId,
-        title: 'Out of stock', detail: `${label} — ${where}` });
-      continue; // out-of-stock supersedes low
+      out.push({ id: `out_${b.id}`, kind: 'out', severity: 'medium', shopId: b.ownerShopId,
+        title: 'Depleted in godown', detail: `${label} — owner ${where}` });
+      continue; // depleted supersedes low
     }
     if (b.quantity <= settings.lowStockThreshold) {
-      out.push({ id: `low_${b.id}`, kind: 'low', severity: 'medium', shopId: b.ownerShopId,
-        title: 'Low stock', detail: `${label} — ${b.quantity} ${b.unit} at ${where}` });
+      out.push({ id: `low_${b.id}`, kind: 'low', severity: 'low', shopId: b.ownerShopId,
+        title: 'Low in godown', detail: `${label} — ${b.quantity} ${b.unit}, owner ${where}` });
     }
 
     const ts = lastMoveTs(b.variantId, b.ownerShopId);
@@ -58,10 +58,10 @@ export function generateNotifications(
       const ageDays = Math.floor((now - ts) / DAY);
       if (ageDays >= settings.deadStockDays) {
         out.push({ id: `dead_${b.id}`, kind: 'dead', severity: 'high', shopId: b.ownerShopId,
-          title: 'Dead stock', detail: `${label} — no movement in ${ageDays}d at ${where}` });
+          title: 'Dead godown stock', detail: `${label} — no godown movement in ${ageDays}d, owner ${where}` });
       } else if (ageDays >= settings.nonMovingDays) {
         out.push({ id: `nonmov_${b.id}`, kind: 'non_moving', severity: 'low', shopId: b.ownerShopId,
-          title: 'Non-moving stock', detail: `${label} — ${ageDays}d since last move at ${where}` });
+          title: 'Non-moving godown stock', detail: `${label} — ${ageDays}d since last godown move, owner ${where}` });
       }
     }
   }
