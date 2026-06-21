@@ -135,54 +135,68 @@ export function Transfers() {
       {visible.length === 0 ? (
         <EmptyState title="No moves yet" hint={canMove ? 'Create one to record stock leaving the godown.' : 'Nothing to show.'} />
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                <th className="px-4 py-3">Move No</th>
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">From Shop</th>
-                <th className="px-4 py-3">Reason</th>
-                <th className="px-4 py-3 text-right">PCS</th>
-                <th className="px-4 py-3 text-right">Total Qty</th>
-                <th className="px-4 py-3 text-right">Lines</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((t) => {
-                const totalPcs = t.lines.reduce((s, l) => s + (l.rollQty ?? 0), 0);
-                const totalQty = t.lines.reduce((s, l) => s + (l.quantity ?? 0), 0);
-                const unit = t.lines[0] ? (variants.find((v) => v.id === t.lines[0].variantId)?.uom ?? t.lines[0].unit) : '';
-                return (
-                  <tr key={t.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50">
-                    <td className="px-4 py-3 font-semibold text-ink-800">{t.transferNo}</td>
-                    <td className="px-4 py-3 text-ink-500">{t.createdAt ? new Date(t.createdAt).toLocaleDateString() : '—'}</td>
-                    <td className="px-4 py-3 text-ink-600">{shopName(t.fromShopId)}</td>
-                    <td className="px-4 py-3 text-ink-500">{t.reason ? MOVE_REASON_LABELS[t.reason] : '—'}</td>
-                    <td className="px-4 py-3 text-right text-ink-600">{totalPcs || '—'}</td>
-                    <td className="px-4 py-3 text-right text-ink-600">{totalQty > 0 ? `${totalQty} ${unit}` : '—'}</td>
-                    <td className="px-4 py-3 text-right text-ink-500">{t.lines.length}</td>
-                    <td className="px-4 py-3"><Badge tone={t.status === 'sent' || t.status === 'received' ? 'ok' : 'neutral'}>{t.status}</Badge></td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(t)}>
-                          {t.status === 'draft' ? 'Edit' : 'View'}
-                        </button>
-                        {t.status === 'draft' && (
-                          <button className="btn-ghost px-2 py-1 text-xs text-red-500 hover:bg-red-50"
-                            onClick={() => setConfirmDelete(t.id)}>Delete</button>
-                        )}
-                        <button className="btn-ghost px-2 py-1 text-xs" onClick={() => window.print()}>Print</button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* Mobile cards */}
+          <div className="space-y-2 md:hidden">
+            {visible.map((t) => {
+              const totalPcs = t.lines.reduce((s, l) => s + (l.rollQty ?? 0), 0);
+              const totalQty = t.lines.reduce((s, l) => s + (l.quantity ?? 0), 0);
+              return (
+                <div key={t.id} className="card p-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-bold text-ink-800">{t.transferNo}</span>
+                    <Badge tone={t.status === 'sent' || t.status === 'received' ? 'ok' : 'neutral'}>{t.status}</Badge>
+                  </div>
+                  <div className="text-sm text-ink-500">{shopName(t.fromShopId)} · {t.reason ? MOVE_REASON_LABELS[t.reason] : '—'}</div>
+                  <div className="text-xs text-ink-400">{totalQty > 0 ? `${totalQty} qty` : ''}{totalPcs > 0 ? ` · ${totalPcs} PCS` : ''}</div>
+                  <div className="mt-2 flex gap-2">
+                    <button className="btn-ghost px-3 py-1 text-xs flex-1" onClick={() => setEditing(t)}>{t.status === 'draft' ? 'Edit' : 'View'}</button>
+                    {t.status === 'draft' && <button className="btn-ghost px-2 py-1 text-xs text-red-500" onClick={() => setConfirmDelete(t.id)}>Delete</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Desktop table */}
+          <div className="card hidden overflow-x-auto md:block">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <th className="px-4 py-3">Move No</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">From Shop</th>
+                  <th className="px-4 py-3">Reason</th><th className="px-4 py-3 text-right">PCS</th>
+                  <th className="px-4 py-3 text-right">Total Qty</th><th className="px-4 py-3 text-right">Lines</th>
+                  <th className="px-4 py-3">Status</th><th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((t) => {
+                  const totalPcs = t.lines.reduce((s, l) => s + (l.rollQty ?? 0), 0);
+                  const totalQty = t.lines.reduce((s, l) => s + (l.quantity ?? 0), 0);
+                  const unit = t.lines[0] ? (variants.find((v) => v.id === t.lines[0].variantId)?.uom ?? t.lines[0].unit) : '';
+                  return (
+                    <tr key={t.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50">
+                      <td className="px-4 py-3 font-semibold text-ink-800">{t.transferNo}</td>
+                      <td className="px-4 py-3 text-ink-500">{t.createdAt ? new Date(t.createdAt).toLocaleDateString() : '—'}</td>
+                      <td className="px-4 py-3 text-ink-600">{shopName(t.fromShopId)}</td>
+                      <td className="px-4 py-3 text-ink-500">{t.reason ? MOVE_REASON_LABELS[t.reason] : '—'}</td>
+                      <td className="px-4 py-3 text-right text-ink-600">{totalPcs || '—'}</td>
+                      <td className="px-4 py-3 text-right text-ink-600">{totalQty > 0 ? `${totalQty} ${unit}` : '—'}</td>
+                      <td className="px-4 py-3 text-right text-ink-500">{t.lines.length}</td>
+                      <td className="px-4 py-3"><Badge tone={t.status === 'sent' || t.status === 'received' ? 'ok' : 'neutral'}>{t.status}</Badge></td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(t)}>{t.status === 'draft' ? 'Edit' : 'View'}</button>
+                          {t.status === 'draft' && <button className="btn-ghost px-2 py-1 text-xs text-red-500 hover:bg-red-50" onClick={() => setConfirmDelete(t.id)}>Delete</button>}
+                          <button className="btn-ghost px-2 py-1 text-xs" onClick={() => window.print()}>Print</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -360,20 +374,57 @@ function MoveEditor({ transfer, onClose }: { transfer: Transfer | null; onClose:
         )}
       </div>
 
-      {/* Lines table */}
-      <div className="card mb-4 overflow-x-auto">
+      {/* Lines — cards on mobile, table on desktop */}
+      <div className="card mb-4">
+        {/* Mobile cards */}
+        <div className="md:hidden">
+          {lines.length === 0 && <div className="px-4 py-6 text-center text-sm text-ink-400">No lines. Scan a barcode or click "+ Add row".</div>}
+          {lines.map((l) => {
+            const v = variants.find((x) => x.id === l.variantId);
+            const pVars = variants.filter((x) => x.productId === l.productId);
+            const ob = ownerAvailable(l.variantId);
+            return (
+              <div key={l.id} className="border-b border-ink-100 last:border-0 p-4 space-y-2">
+                <div className="flex gap-2">
+                  <select className="input flex-1 text-sm" disabled={readOnly} value={l.productId} onChange={(e) => { const p = products.find((x) => x.id === e.target.value); patchLine(l.id, { productId: e.target.value, variantId: '', unit: p?.defaultUnit ?? 'Yard' }); }}>
+                    <option value="">Product…</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                  <select className="input flex-1 text-sm" disabled={readOnly} value={l.variantId} onChange={(e) => { const fv = variants.find((x) => x.id === e.target.value); patchLine(l.id, { variantId: e.target.value, barcode: fv?.barcode ?? '', unit: fv?.uom ?? 'Yard' }); }}>
+                    <option value="">Variant…</option>{pVars.map((fv) => <option key={fv.id} value={fv.id}>{fv.label}</option>)}
+                  </select>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <div className="text-[10px] text-ink-400">PCS</div>
+                    <div className="flex gap-1">
+                      <input type="number" className="input w-full text-right" disabled={readOnly} value={l.rollQty || ''} placeholder="0" onChange={(e) => patchLine(l.id, { rollQty: Number(e.target.value) || 0 })} />
+                      {!readOnly && <button className="h-8 w-8 flex-shrink-0 rounded bg-ink-100 text-xs hover:bg-teal-100" onClick={() => setCalcFor(l.id)}>+</button>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-ink-400">Total Qty</div>
+                    <input type="number" className="input w-full font-semibold text-right" disabled={readOnly} value={l.quantity || ''} placeholder="0" onChange={(e) => patchLine(l.id, { quantity: Number(e.target.value) || 0 })} />
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-ink-400">UOM</div>
+                    <input className="input w-full" disabled={readOnly} value={l.unit} onChange={(e) => patchLine(l.id, { unit: e.target.value })} />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-teal-700 font-semibold">Avail: {ob ? `${ob.quantity} ${v?.uom ?? l.unit}` : '—'}</span>
+                  <input className="input flex-1 mx-2 text-sm" disabled={readOnly} value={l.remarks ?? ''} placeholder={reason === 'damaged_goods' ? 'remarks required' : 'remarks…'} onChange={(e) => patchLine(l.id, { remarks: e.target.value })} />
+                  {!readOnly && <button className="text-ink-400 hover:text-red-500" onClick={() => removeLine(l.id)}>✕</button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {/* Desktop table */}
+        <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-ink-100 bg-ink-50 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-              <th className="px-2 py-2">Barcode</th>
-              <th className="px-2 py-2">Product</th>
-              <th className="px-2 py-2">Variant</th>
-              <th className="px-2 py-2 text-right">PCS</th>
-              <th className="px-2 py-2 text-right">Total Qty</th>
-              <th className="px-2 py-2">UOM</th>
-              <th className="px-2 py-2">Available</th>
-              <th className="px-2 py-2">Remarks</th>
-              <th className="px-2 py-2" />
+              <th className="px-2 py-2">Barcode</th><th className="px-2 py-2">Product</th><th className="px-2 py-2">Variant</th><th className="px-2 py-2 text-right">PCS</th><th className="px-2 py-2 text-right">Total Qty</th><th className="px-2 py-2">UOM</th><th className="px-2 py-2">Available</th><th className="px-2 py-2">Remarks</th><th className="px-2 py-2" />
             </tr>
           </thead>
           <tbody>
@@ -473,6 +524,7 @@ function MoveEditor({ transfer, onClose }: { transfer: Transfer | null; onClose:
             </tfoot>
           )}
         </table>
+        </div>{/* end desktop table */}
       </div>
 
       {/* Warnings */}
@@ -485,18 +537,20 @@ function MoveEditor({ transfer, onClose }: { transfer: Transfer | null; onClose:
         </div>
       )}
 
-      {/* Actions */}
+      {/* Sticky actions on mobile */}
       {!readOnly && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button className="btn-ghost" onClick={addLine}>+ Add row</button>
-          <div className="ml-auto flex gap-2">
-            {transfer?.status === 'draft' && (
-              <button className="btn-ghost text-red-500 hover:bg-red-50" onClick={() => setConfirmDelete(true)}>Delete draft</button>
-            )}
-            <button className="btn-ghost" onClick={doSaveDraft}>Save draft</button>
-            {can(user?.role, 'transfer_stock') && (
-              <button className="btn-primary" onClick={doPost}>Post move</button>
-            )}
+        <div className="fixed bottom-16 inset-x-0 z-20 border-t border-ink-100 bg-white px-4 py-3 md:relative md:bottom-auto md:inset-x-auto md:border-0 md:bg-transparent md:p-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn-ghost text-sm" onClick={addLine}>+ Add row</button>
+            <div className="ml-auto flex gap-2">
+              {transfer?.status === 'draft' && (
+                <button className="btn-ghost text-sm text-red-500 hover:bg-red-50" onClick={() => setConfirmDelete(true)}>Delete draft</button>
+              )}
+              <button className="btn-ghost text-sm" onClick={doSaveDraft}>Save draft</button>
+              {can(user?.role, 'transfer_stock') && (
+                <button className="btn-primary text-sm" onClick={doPost}>Post move</button>
+              )}
+            </div>
           </div>
         </div>
       )}

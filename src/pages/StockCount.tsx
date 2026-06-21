@@ -104,54 +104,59 @@ export function StockCount() {
       {visible.length === 0 ? (
         <EmptyState title="No counts yet" hint="Create a count session to verify physical stock." />
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                <th className="px-4 py-3">Count No</th>
-                <th className="px-4 py-3">Shop</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3 text-right">Lines</th>
-                <th className="px-4 py-3 text-right">Variance (MVR)</th>
-                <th className="px-4 py-3">Approved By</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((c) => (
-                <tr key={c.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50">
-                  <td className="px-4 py-3 font-semibold text-ink-800">{c.countNo}</td>
-                  <td className="px-4 py-3 text-ink-600">{shopName(c.shopId)}</td>
-                  <td className="px-4 py-3 capitalize text-ink-500">{c.countType ?? 'full'}</td>
-                  <td className="px-4 py-3 text-ink-500">{c.date}</td>
-                  <td className="px-4 py-3 text-right text-ink-600">{c.lines.length}</td>
-                  <td className="px-4 py-3 text-right">
-                    {c.varianceValueMvr != null
-                      ? <span className={c.varianceValueMvr < 0 ? 'text-red-600 font-semibold' : 'text-ink-600'}>
-                          {c.varianceValueMvr > 0 ? '+' : ''}{c.varianceValueMvr.toFixed(2)}
-                        </span>
-                      : <span className="text-ink-300">—</span>}
-                  </td>
-                  <td className="px-4 py-3 text-ink-500 text-xs">{c.approvedBy ? c.approvedBy.slice(0, 8) + '…' : '—'}</td>
-                  <td className="px-4 py-3"><Badge tone={STATUS_TONE[c.status]}>{STATUS_LABEL[c.status]}</Badge></td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button className="btn-ghost px-3 py-1 text-xs" onClick={() => setEditing(c)}>
-                        {c.status === 'open' || c.status === 'rejected' ? 'Edit' : 'View'}
-                      </button>
-                      {c.status === 'open' && (
-                        <button className="btn-ghost px-2 py-1 text-xs text-red-500 hover:bg-red-50"
-                          onClick={() => setConfirmDelete(c.id)}>Delete</button>
-                      )}
-                    </div>
-                  </td>
+        <>
+          {/* Mobile cards */}
+          <div className="space-y-2 md:hidden">
+            {visible.map((c) => (
+              <div key={c.id} className="card p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-ink-800">{c.countNo}</span>
+                  <Badge tone={STATUS_TONE[c.status]}>{STATUS_LABEL[c.status]}</Badge>
+                </div>
+                <div className="text-sm text-ink-500">{shopName(c.shopId)} · {c.date} · {c.lines.length} lines</div>
+                <div className="mt-2 flex gap-2">
+                  <button className="btn-ghost px-3 py-1 text-xs flex-1" onClick={() => setEditing(c)}>{c.status === 'open' || c.status === 'rejected' ? 'Edit' : 'View'}</button>
+                  {c.status === 'open' && <button className="btn-ghost px-2 py-1 text-xs text-red-500" onClick={() => setConfirmDelete(c.id)}>Delete</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Desktop table */}
+          <div className="card hidden overflow-x-auto md:block">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <th className="px-4 py-3">Count No</th><th className="px-4 py-3">Shop</th><th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Date</th><th className="px-4 py-3 text-right">Lines</th>
+                  <th className="px-4 py-3 text-right">Variance (MVR)</th><th className="px-4 py-3">Approved By</th>
+                  <th className="px-4 py-3">Status</th><th className="px-4 py-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {visible.map((c) => (
+                  <tr key={c.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50">
+                    <td className="px-4 py-3 font-semibold text-ink-800">{c.countNo}</td>
+                    <td className="px-4 py-3 text-ink-600">{shopName(c.shopId)}</td>
+                    <td className="px-4 py-3 capitalize text-ink-500">{c.countType ?? 'full'}</td>
+                    <td className="px-4 py-3 text-ink-500">{c.date}</td>
+                    <td className="px-4 py-3 text-right text-ink-600">{c.lines.length}</td>
+                    <td className="px-4 py-3 text-right">
+                      {c.varianceValueMvr != null ? <span className={c.varianceValueMvr < 0 ? 'text-red-600 font-semibold' : 'text-ink-600'}>{c.varianceValueMvr > 0 ? '+' : ''}{c.varianceValueMvr.toFixed(2)}</span> : <span className="text-ink-300">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-ink-500 text-xs">{c.approvedBy ? c.approvedBy.slice(0, 8) + '…' : '—'}</td>
+                    <td className="px-4 py-3"><Badge tone={STATUS_TONE[c.status]}>{STATUS_LABEL[c.status]}</Badge></td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button className="btn-ghost px-3 py-1 text-xs" onClick={() => setEditing(c)}>{c.status === 'open' || c.status === 'rejected' ? 'Edit' : 'View'}</button>
+                        {c.status === 'open' && <button className="btn-ghost px-2 py-1 text-xs text-red-500 hover:bg-red-50" onClick={() => setConfirmDelete(c.id)}>Delete</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -405,9 +410,9 @@ function CountEditor({ count, onClose }: { count: Count | null; onClose: () => v
         {/* ── Entry methods ── */}
         {!readOnly && (
           <div className="mt-4 border-t border-ink-100 pt-4">
-            <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
               {/* A: Barcode scan */}
-              <div className="flex-1 min-w-[200px]">
+              <div className="flex-1 w-full sm:min-w-[200px] sm:flex-1">
                 <label className="label">A. Scan barcode</label>
                 <div className="flex gap-2">
                   <input className="input flex-1 font-mono" placeholder="AUR-C01…" value={barcodeInput}
@@ -417,7 +422,7 @@ function CountEditor({ count, onClose }: { count: Count | null; onClose: () => v
                 </div>
               </div>
               {/* B: Variant search */}
-              <div className="flex-1 min-w-[200px]">
+              <div className="flex-1 w-full sm:min-w-[200px] sm:flex-1">
                 <label className="label">B. Search variant</label>
                 <select className="input" value="" onChange={(e) => addVariantLine(e.target.value)}>
                   <option value="">Select variant…</option>
@@ -449,8 +454,60 @@ function CountEditor({ count, onClose }: { count: Count | null; onClose: () => v
         )}
       </div>
 
-      {/* ── Count grid ── */}
-      <div className="card mb-4 overflow-x-auto">
+      {/* Count grid — cards on mobile, table on desktop */}
+      <div className="card mb-4">
+        {/* Mobile cards */}
+        <div className="md:hidden">
+          {lines.length === 0 && (
+            <div className="px-4 py-8 text-center text-sm text-ink-400">Use barcode scan, variant search, or <b>Load All Shop Stock</b> to add lines.</div>
+          )}
+          {lines.map((l) => {
+            const v    = variants.find((x) => x.id === l.variantId);
+            const p    = products.find((x) => x.id === l.productId);
+            const tone = varianceTone(l.variance, l.expectedQuantity);
+            const pcsVar = (l.actualRolls ?? 0) - (l.expectedRolls ?? 0);
+            const pcsTone = varianceTone(pcsVar, l.expectedRolls ?? 0);
+            const isHighlighted = highlightId === l.id;
+            const needsReason = (pcsVar !== 0 || l.variance !== 0) && !l.reason?.trim() && !readOnly;
+            return (
+              <div key={l.id} id={`row-${l.id}`}
+                className={`border-b border-ink-100 last:border-0 p-4 transition-colors ${isHighlighted ? 'bg-amber-100 ring-2 ring-amber-400' : VAR_ROW[tone]}`}>
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <div className="font-bold text-ink-800 text-sm">{p?.name ?? productName(l.productId)}</div>
+                    <div className="text-xs text-ink-500">{v?.colorName ?? v?.label} · <span className="font-mono">{v?.barcode}</span> · {l.unit}</div>
+                  </div>
+                  {!readOnly && <button className="text-ink-400 hover:text-red-500 ml-2" onClick={() => removeLine(l.id)}>✕</button>}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-[10px] text-ink-400 mb-1">System PCS → Physical PCS</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-ink-500">{l.expectedRolls ?? 0}</span>
+                      <span className="text-ink-300">→</span>
+                      <input type="number" min="0" className={`input w-16 px-2 py-1 text-right ${(l.actualRolls ?? 0) < 0 ? 'border-red-500' : ''}`} disabled={readOnly} value={l.actualRolls ?? ''} onChange={(e) => updateLine(l.id, { actualRolls: e.target.value === '' ? 0 : parseFloat(e.target.value) })} />
+                      {pcsVar !== 0 && <span className={`text-sm font-bold ${VAR_TEXT[pcsTone]}`}>{pcsVar > 0 ? '+' : ''}{pcsVar}</span>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-ink-400 mb-1">System Qty → Physical Qty</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-ink-500">{l.expectedQuantity}</span>
+                      <span className="text-ink-300">→</span>
+                      <input type="number" min="0" className={`input w-20 px-2 py-1 text-right font-semibold ${l.actualQuantity < 0 ? 'border-red-500' : ''}`} disabled={readOnly} value={l.actualQuantity} onChange={(e) => updateLine(l.id, { actualQuantity: parseFloat(e.target.value) || 0 })} />
+                      {l.variance !== 0 && <span className={`text-sm font-bold ${VAR_TEXT[tone]}`}>{l.variance > 0 ? '+' : ''}{l.variance}</span>}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <input className={`input w-full px-2 py-1.5 text-sm ${needsReason ? 'border-amber-400' : ''}`} disabled={readOnly} value={l.reason ?? ''} placeholder={needsReason ? 'reason required' : 'reason (optional)'} onChange={(e) => updateLine(l.id, { reason: e.target.value })} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {/* Desktop table */}
+        <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-ink-100 bg-ink-50 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-400">
@@ -543,6 +600,7 @@ function CountEditor({ count, onClose }: { count: Count | null; onClose: () => v
           </tbody>
         </table>
       </div>
+      </div>
 
       {/* ── Summary panel ── */}
       {lines.length > 0 && (
@@ -564,8 +622,8 @@ function CountEditor({ count, onClose }: { count: Count | null; onClose: () => v
         </div>
       )}
 
-      {/* ── Actions ── */}
-      <div className="flex flex-wrap items-center gap-2">
+      {/* ── Actions — sticky on mobile ── */}
+      <div className="fixed bottom-16 inset-x-0 z-20 flex flex-wrap items-center gap-2 border-t border-ink-100 bg-white px-4 py-3 md:relative md:bottom-auto md:inset-x-auto md:border-0 md:bg-transparent md:p-0">
         {/* Warehouse staff actions */}
         {!readOnly && (
           <>

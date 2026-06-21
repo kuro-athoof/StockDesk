@@ -5,7 +5,7 @@
  */
 import { useMemo, useState } from 'react';
 import { useStore } from '../context/StoreContext';
-import { PageHeader, Badge, EmptyState } from '../components/ui';
+import { PageHeader, Badge } from '../components/ui';
 import { can } from '../lib/permissions';
 import type { DamageStatus } from '../types';
 
@@ -105,14 +105,43 @@ export function Damaged() {
         ))}
       </div>
 
-      {records.length === 0 ? (
-        <EmptyState
-          title={`No ${tab} reports`}
-          hint={tab === 'pending' ? 'Warehouse staff submit damage reports from Warehouse Mode.' : `No ${tab} reports yet.`}
-        />
-      ) : (
-        <div className="card overflow-x-auto">
-          <table className="w-full text-sm">
+      {/* Mobile cards */}
+      <div className="space-y-3 md:hidden">
+        {records.length === 0 && <div className="card p-6 text-center text-sm text-ink-400">{tab === 'pending' ? 'No pending reports.' : `No ${tab} reports.`}</div>}
+        {records.map((r) => {
+          const v = variants.find((x) => x.id === r.variantId);
+          return (
+            <div key={r.id} className="card p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="font-semibold text-ink-800">{productName(r.productId)}</div>
+                  <div className="text-xs text-ink-400">{v?.colorName ?? v?.label} · <span className="font-mono">{r.barcode ?? v?.barcode}</span></div>
+                </div>
+                <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="rounded bg-red-50 p-2"><div className="text-red-400">Qty</div><div className="font-bold text-red-700">{r.reportedQty} {r.uom}</div></div>
+                <div className="rounded bg-ink-50 p-2"><div className="text-ink-400">PCS</div><div className="font-bold text-ink-700">{r.reportedPcs || '—'}</div></div>
+                <div className="rounded bg-ink-50 p-2"><div className="text-ink-400">Reason</div><div className="font-bold text-ink-700 truncate">{r.reason}</div></div>
+              </div>
+              <div className="mt-2 text-xs text-ink-400">{new Date(r.reportedAt).toLocaleDateString()} · {r.reportedByName}</div>
+              {r.notes && <div className="mt-1 text-xs text-ink-500">{r.notes}</div>}
+              {isManager && tab === 'pending' && (
+                <div className="mt-3 flex gap-2">
+                  {canApprove && <button className="flex-1 rounded-lg bg-teal-500 py-2 text-xs font-bold text-white" onClick={() => doApprove(r.id)}>Approve</button>}
+                  <button className="flex-1 rounded-lg bg-red-100 py-2 text-xs font-bold text-red-700" onClick={() => setRejectTarget(r.id)}>Reject</button>
+                </div>
+              )}
+              {tab === 'rejected' && r.rejectionNote && <div className="mt-2 text-xs text-red-500">Rejected: {r.rejectionNote}</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop table */}
+      {records.length > 0 && (
+      <div className="card hidden overflow-x-auto md:block">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
                 <th className="px-4 py-3">Date</th>

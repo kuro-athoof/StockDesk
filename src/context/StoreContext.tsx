@@ -589,18 +589,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } else if (trf.type === 'ownership') {
         // Ownership change between owners — both still in the godown. Deduct from
         // the source owner's godown stock, credit the destination owner's godown stock.
+        // Fix P1.3: include rollDelta so PCS/rollCount also transfers correctly.
+        const rollsOut = variant.productType === 'general' ? undefined : -(line.rollQty ?? 0);
+        const rollsIn  = variant.productType === 'general' ? undefined : (line.rollQty ?? 0);
         const outRes = await applyLocalMovement({
           variant, ownerShopId: trf.fromShopId, qtyChanged: -line.quantity, unit: line.unit,
           action: 'OWNERSHIP_TRANSFER',
-          remarks: `Move ${trf.transferNo}: godown ownership → ${shopName(trf.toShopId)}`,
-          refId: trf.transferNo,
+          remarks: `Move ${trf.transferNo}: godown ownership → ${shopName(trf.toShopId)}${line.rollQty ? `, ${line.rollQty} PCS` : ''}`,
+          refId: trf.transferNo, rollDelta: rollsOut,
         });
         if (!outRes.ok) return { ok: false, error: `Line failed: ${outRes.error}`, needsOverride: outRes.needsOverride };
         const inRes = await applyLocalMovement({
           variant, ownerShopId: trf.toShopId, qtyChanged: line.quantity, unit: line.unit,
           action: 'OWNERSHIP_TRANSFER',
-          remarks: `Move ${trf.transferNo}: godown ownership ← ${shopName(trf.fromShopId)}`,
-          refId: trf.transferNo, locationId: trf.toLocationId,
+          remarks: `Move ${trf.transferNo}: godown ownership ← ${shopName(trf.fromShopId)}${line.rollQty ? `, ${line.rollQty} PCS` : ''}`,
+          refId: trf.transferNo, locationId: trf.toLocationId, rollDelta: rollsIn,
         });
         if (!inRes.ok) return { ok: false, error: `Destination credit failed: ${inRes.error}` };
       } else {

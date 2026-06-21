@@ -72,7 +72,29 @@ export function Stock() {
 
       <div className="mb-3 text-xs text-ink-400">{rows.length} rows</div>
 
-      <div className="card overflow-x-auto">
+      {/* Mobile cards */}
+      <div className="space-y-2 md:hidden">
+        {rows.length === 0 && <div className="card p-6 text-center text-sm text-ink-400">No stock matches these filters.</div>}
+        {rows.map(({ b, v }) => (
+          <div key={b.id} className="card p-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="font-semibold text-ink-800">{productName(b.productId)}</div>
+                <div className="text-xs text-ink-400">{v?.label} · <span className="font-mono">{v?.barcode ?? '—'}</span></div>
+              </div>
+              <Badge tone={tone(b.quantity)}>{b.quantity <= 0 ? 'Depleted' : b.quantity <= settings.lowStockThreshold ? 'Low' : 'OK'}</Badge>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="rounded bg-ink-50 p-2"><div className="text-ink-400">PCS</div><div className="font-bold text-ink-800">{b.rollCount ?? '—'}</div></div>
+              <div className="rounded bg-ink-50 p-2"><div className="text-ink-400">Qty</div><div className="font-bold text-ink-800">{b.quantity} <span className="font-normal text-ink-400">{b.unit}</span></div></div>
+              <div className="rounded bg-ink-50 p-2"><div className="text-ink-400">Shop</div><div className="font-bold text-ink-700">{shopName(b.ownerShopId)}</div></div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop table */}
+      <div className="card hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">

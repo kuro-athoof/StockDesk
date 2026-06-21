@@ -301,7 +301,7 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
       </div>
 
       {/* Summary cards */}
-      <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCard label="Variants" value={isGeneral ? `${variants.length} Items` : `${variants.length} Colors`} />
         <SummaryCard label="PCS" value={isGeneral ? '—' : String(summary.totalPcs)} />
         <SummaryCard label="Total Quantity" value={`${summary.totalQuantity.toLocaleString()}${summary.unit ? ' ' + summary.unit : ''}`} />
@@ -327,6 +327,11 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
               <tbody>
                 {variants.map((v) => {
                   const sel = selectedVariant === v.id;
+                  // Source of truth: stock_balances (not variant aggregate fields)
+                  const vBals = scopedBalances.filter((b) => b.variantId === v.id);
+                  const balPcs = vBals.reduce((s, b) => s + (b.rollCount ?? 0), 0);
+                  const balQty = Math.round(vBals.reduce((s, b) => s + b.quantity, 0) * 100) / 100;
+                  const balValue = Math.round(balQty * (v.cost ?? 0) * 100) / 100;
                   return (
                     <tr key={v.id} className={`cursor-pointer border-b border-ink-50 last:border-0 ${sel ? 'bg-teal-50' : 'hover:bg-ink-50/50'}`} onClick={() => { setSelectedVariant(v.id); setTab('receipts'); }}>
                       <td className="py-2 font-mono text-xs text-ink-700">{v.barcode ?? '—'}</td>
@@ -334,10 +339,10 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
                         <div className="font-semibold text-ink-800">{v.colorName ?? v.label}</div>
                         <div className="text-[10px] text-ink-400">{v.ourColorNumber ? `Our #${v.ourColorNumber}` : ''}{v.supplierColorNumber ? ` · Sup #${v.supplierColorNumber}` : ''}</div>
                       </td>
-                      <td className="py-2 text-right text-ink-600">{v.rollQty ?? 0}</td>
-                      <td className="py-2 text-right text-ink-700">{v.totalQty ?? 0} {v.uom ?? ''}</td>
+                      <td className="py-2 text-right text-ink-600">{balPcs}</td>
+                      <td className="py-2 text-right text-ink-700">{balQty} {v.uom ?? ''}</td>
                       <td className="py-2 text-right text-ink-600">{v.cost != null ? v.cost.toFixed(2) : '—'}</td>
-                      <td className="py-2 text-right font-semibold text-ink-800">{(v.totalValue ?? 0).toLocaleString()}</td>
+                      <td className="py-2 text-right font-semibold text-ink-800">{balValue.toLocaleString()}</td>
                       <td className="py-2">{v.active === false ? <Badge tone="out">Inactive</Badge> : <Badge tone="ok">Active</Badge>}</td>
                       <td className="py-2 text-right">{editable && <button className="text-xs text-teal-600" onClick={(e) => { e.stopPropagation(); setEditVariant(v); }}>Edit</button>}</td>
                     </tr>
@@ -378,7 +383,9 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
                         </>);
                       })()}
                       <Detail label="Cost" value={v.cost != null ? `${v.cost.toFixed(2)} MVR` : '—'} />
-                      <Detail label="Total Value" value={`${(v.totalValue ?? 0).toLocaleString()} MVR`} />
+                      <Detail label="Total Value" value={`${Math.round(
+                        Math.round(scopedBalances.filter((b) => b.variantId === v.id).reduce((s, b) => s + b.quantity, 0) * 100) / 100
+                        * (v.cost ?? 0) * 100) / 100} MVR`} />
                       <Detail label="UOM" value={v.uom ?? '—'} />
                       <Detail label="Last Receive" value={lastRcv ? new Date(lastRcv.timestamp).toLocaleDateString() : '—'} />
                       <Detail label="Last Transfer" value={lastTrf ? new Date(lastTrf.timestamp).toLocaleDateString() : '—'} />
@@ -412,7 +419,7 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
           </div>
           <div className="card p-4">
             <h4 className="mb-2 text-sm font-bold text-ink-900">Costing Information</h4>
-            <CostingInfo variants={variants} productId={product.id} />
+            <CostingInfo variants={variants} productId={product.id} scopedBalances={scopedBalances} />
           </div>
           <div className="card p-4">
             <h4 className="mb-2 text-sm font-bold text-ink-900">Quick Actions</h4>
@@ -526,14 +533,25 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   return <div className="flex justify-between border-b border-ink-50 py-1.5 text-sm last:border-0"><span className="text-ink-500">{label}</span><span className="font-semibold text-ink-800">{value}</span></div>;
 }
 
-function CostingInfo({ variants, productId }: { variants: Variant[]; productId: string }) {
-  const sample = variants.find((v) => v.productId === productId && v.cost != null);
+function CostingInfo({ variants, productId, scopedBalances }: {
+  variants: Variant[];
+  productId: string;
+  scopedBalances: { variantId: string; quantity: number; unit: string; rollCount?: number }[];
+}) {
+  const vs = variants.filter((v) => v.productId === productId && v.cost != null);
+  const sample = vs[0];
   if (!sample) return <p className="text-sm text-ink-400">No costed stock yet.</p>;
+  // Source of truth: stock_balances, not variant aggregates
+  const vBals = scopedBalances.filter((b) => vs.some((v) => v.id === b.variantId));
+  const totalPcs = vBals.reduce((s, b) => s + (b.rollCount ?? 0), 0);
+  const totalQty = Math.round(vBals.reduce((s, b) => s + b.quantity, 0) * 100) / 100;
+  const totalValue = Math.round(totalQty * (sample.cost ?? 0) * 100) / 100;
   return (
     <div>
       <SummaryRow label={`Cost / ${sample.uom ?? 'unit'}`} value={`${(sample.cost ?? 0).toFixed(2)} MVR`} />
-      <SummaryRow label="PCS" value={String(sample.rollQty ?? '—')} />
-      <SummaryRow label="Total Value" value={`${(sample.totalValue ?? 0).toLocaleString()} MVR`} />
+      <SummaryRow label="PCS (balance)" value={String(totalPcs)} />
+      <SummaryRow label="Total Qty" value={`${totalQty} ${sample.uom ?? ''}`} />
+      <SummaryRow label="Total Value" value={`${totalValue.toLocaleString()} MVR`} />
     </div>
   );
 }

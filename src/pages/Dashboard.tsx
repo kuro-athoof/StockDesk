@@ -131,7 +131,7 @@ export function Dashboard() {
       />
 
       {/* Row 1: 4 stat cards */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {/* Card 1: Godown Value */}
         <div className="card p-4">
           <div className="text-xs font-semibold uppercase tracking-wide text-ink-400">Godown Value</div>
@@ -179,7 +179,8 @@ export function Dashboard() {
         {/* Card 4: Low Stock */}
         <div className="card p-4 lg:col-span-1">
           <h3 className="mb-3 text-sm font-bold text-ink-900">Low Stock <span className="text-ink-400 font-normal">(lowest 10)</span></h3>
-          <table className="w-full text-xs">
+          <div className="overflow-x-auto">
+          <table className="w-full text-xs min-w-[240px]">
             <thead>
               <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-ink-400">
                 <th className="pb-1.5">Barcode</th><th className="pb-1.5">Variant</th><th className="pb-1.5 text-right">Qty</th><th className="pb-1.5">UOM</th>
@@ -197,12 +198,14 @@ export function Dashboard() {
               {lowStock.length === 0 && <tr><td colSpan={4} className="py-3 text-center text-ink-400">No stock yet</td></tr>}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Card 5: Largest Stock Value */}
         <div className="card p-4 lg:col-span-1">
           <h3 className="mb-3 text-sm font-bold text-ink-900">Largest Stock Value <span className="text-ink-400 font-normal">(top 10)</span></h3>
-          <table className="w-full text-xs">
+          <div className="overflow-x-auto">
+          <table className="w-full text-xs min-w-[220px]">
             <thead>
               <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-ink-400">
                 <th className="pb-1.5">Barcode</th><th className="pb-1.5">Variant</th><th className="pb-1.5 text-right">Value</th>
@@ -219,6 +222,7 @@ export function Dashboard() {
               {largestValue.length === 0 && <tr><td colSpan={3} className="py-3 text-center text-ink-400">No stock yet</td></tr>}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Card 8: Quick Summary */}

@@ -61,44 +61,58 @@ export function Receiving() {
       {visible.length === 0 ? (
         <EmptyState title="No receivings yet" hint={canReceive ? 'Create one to record incoming stock.' : 'Nothing to show for your shops.'} />
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
-                <th className="px-4 py-3">Receiving No</th>
-                <th className="px-4 py-3">Shop</th>
-                <th className="px-4 py-3">Supplier</th>
-                <th className="px-4 py-3">Invoice</th>
-                <th className="px-4 py-3 text-right">Lines</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((r) => (
-                <tr key={r.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50">
-                  <td className="px-4 py-3 font-semibold text-ink-800">{r.receivingNo}</td>
-                  <td className="px-4 py-3 text-ink-600">{shopName(r.ownerShopId)}</td>
-                  <td className="px-4 py-3 text-ink-600">{r.supplierId ? supplierName(r.supplierId) : '—'}</td>
-                  <td className="px-4 py-3 text-ink-500">{r.invoiceNumber ?? '—'}</td>
-                  <td className="px-4 py-3 text-right text-ink-600">{r.lines.length}</td>
-                  <td className="px-4 py-3"><Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge></td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button className="btn-ghost px-3 py-1 text-xs" onClick={() => setEditing(r)}>
-                        {r.status === 'draft' ? 'Edit' : 'View'}
-                      </button>
-                      {r.status === 'draft' && (
-                        <button className="btn-ghost px-2 py-1 text-xs text-red-500 hover:bg-red-50"
-                          onClick={() => setConfirmDelete(r.id)}>Delete</button>
-                      )}
-                    </div>
-                  </td>
+        <>
+          {/* Mobile card list */}
+          <div className="space-y-2 md:hidden">
+            {visible.map((r) => (
+              <div key={r.id} className="card p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-ink-800">{r.receivingNo}</span>
+                  <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>
+                </div>
+                <div className="text-sm text-ink-500">{shopName(r.ownerShopId)} · {r.supplierId ? supplierName(r.supplierId) : '—'}</div>
+                <div className="mt-2 flex gap-2">
+                  <button className="btn-ghost px-3 py-1 text-xs flex-1" onClick={() => setEditing(r)}>{r.status === 'draft' ? 'Edit' : 'View'}</button>
+                  {r.status === 'draft' && <button className="btn-ghost px-2 py-1 text-xs text-red-500" onClick={() => setConfirmDelete(r.id)}>Delete</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Desktop table */}
+          <div className="card hidden overflow-x-auto md:block">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
+                  <th className="px-4 py-3">Receiving No</th>
+                  <th className="px-4 py-3">Shop</th>
+                  <th className="px-4 py-3">Supplier</th>
+                  <th className="px-4 py-3">Invoice</th>
+                  <th className="px-4 py-3 text-right">Lines</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {visible.map((r) => (
+                  <tr key={r.id} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/50">
+                    <td className="px-4 py-3 font-semibold text-ink-800">{r.receivingNo}</td>
+                    <td className="px-4 py-3 text-ink-600">{shopName(r.ownerShopId)}</td>
+                    <td className="px-4 py-3 text-ink-600">{r.supplierId ? supplierName(r.supplierId) : '—'}</td>
+                    <td className="px-4 py-3 text-ink-500">{r.invoiceNumber ?? '—'}</td>
+                    <td className="px-4 py-3 text-right text-ink-600">{r.lines.length}</td>
+                    <td className="px-4 py-3"><Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge></td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button className="btn-ghost px-3 py-1 text-xs" onClick={() => setEditing(r)}>{r.status === 'draft' ? 'Edit' : 'View'}</button>
+                        {r.status === 'draft' && <button className="btn-ghost px-2 py-1 text-xs text-red-500 hover:bg-red-50" onClick={() => setConfirmDelete(r.id)}>Delete</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -498,23 +512,76 @@ function ReceivingEditor({ receiving, onClose }: { receiving: Receiving | null; 
         )}
       </div>
 
-      {/* Lines table */}
-      <div className="card mb-4 overflow-x-auto">
+      {/* Lines — table on desktop, cards on mobile */}
+      <div className="card mb-4">
+        {/* Mobile cards */}
+        <div className="md:hidden">
+          {lines.length === 0 && (
+            <div className="px-4 py-6 text-center text-sm text-ink-400">No lines yet. Scan or click + Add row.</div>
+          )}
+          {lines.map((l) => {
+            const prodVariants = variants.filter((v) => v.productId === l.productId);
+            return (
+              <div key={l.id} className="border-b border-ink-100 last:border-0 p-4 space-y-2">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex gap-2 mb-2">
+                      <select className="input flex-1 text-sm px-2 py-1.5" disabled={readOnly} value={l.productId} onChange={(e) => onProduct(l.id, e.target.value)}>
+                        <option value="">Product…</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                      <select className="input flex-1 text-sm px-2 py-1.5" disabled={readOnly} value={l.variantId} onChange={(e) => onVariant(l.id, e.target.value)}>
+                        <option value="">Variant…</option>{prodVariants.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      </select>
+                    </div>
+                    <div className="flex gap-2 mb-2">
+                      <div className="flex-1">
+                        <div className="text-[10px] text-ink-400 mb-0.5">Barcode</div>
+                        <input className="input w-full font-mono text-sm px-2 py-1.5" disabled={readOnly} value={l.barcode ?? ''} onChange={(e) => { const v = variants.find((x) => x.barcode?.toLowerCase() === e.target.value.toLowerCase()); if (v) { const p = products.find((x) => x.id === v.productId); patch(l.id, { barcode: e.target.value, productId: v.productId, variantId: v.id, category: p?.category ?? '', stockUom: v.uom ?? p?.defaultUnit ?? 'Yard', fobUnit: v.uom ?? p?.defaultUnit ?? 'Yard' }); } else patch(l.id, { barcode: e.target.value }); }} />
+                      </div>
+                      <div className="w-16">
+                        <div className="text-[10px] text-ink-400 mb-0.5">UOM</div>
+                        <input className="input w-full px-2 py-1.5 text-sm" disabled={readOnly} value={l.stockUom} onChange={(e) => patch(l.id, { stockUom: e.target.value })} />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 mb-2">
+                      <div>
+                        <div className="text-[10px] text-ink-400">PCS</div>
+                        <div className="flex items-center gap-1">
+                          <input type="number" className="input w-full px-2 py-1.5 text-right" disabled={readOnly} value={l.rollQty ?? ''} placeholder="0" onChange={(e) => patch(l.id, { rollQty: num(e.target.value) })} />
+                          {!readOnly && <button className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded bg-ink-100 text-xs hover:bg-teal-100" onClick={() => setCalcFor(l.id)}>+</button>}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-ink-400">Total Qty</div>
+                        <input type="number" className="input w-full px-2 py-1.5 text-right font-semibold" disabled={readOnly} value={l.quantity || ''} placeholder="0" onChange={(e) => patch(l.id, { quantity: num(e.target.value) ?? 0 })} />
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-ink-400">FOB</div>
+                        <input type="number" className="input w-full px-2 py-1.5 text-right" disabled={readOnly} value={l.fobValue ?? ''} onChange={(e) => patch(l.id, { fobValue: num(e.target.value) })} />
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-ink-400">FOB Unit</div>
+                        <input type="number" className="input w-full px-2 py-1.5 text-right" disabled={readOnly} value={l.fobUomUnit ?? ''} placeholder="1" onChange={(e) => patch(l.id, { fobUomUnit: num(e.target.value) ?? 1 })} />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-ink-500">Cost: <b className="text-ink-800">{l.cost != null ? l.cost.toFixed(2) : '—'}</b></span>
+                      <span className="text-ink-500">Total: <b className="text-teal-700">{l.totalCost != null ? l.totalCost.toLocaleString(undefined, {minimumFractionDigits:2,maximumFractionDigits:2}) : '—'}</b></span>
+                      {l.costChanged && <span className="text-[10px] font-semibold text-amber-600">⚠ cost changed</span>}
+                    </div>
+                  </div>
+                  {!readOnly && <button className="ml-3 mt-1 text-ink-400 hover:text-red-500" onClick={() => removeLine(l.id)}>✕</button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {/* Desktop table */}
+        <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-ink-100 bg-ink-50 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-              <th className="px-2 py-2">Barcode</th>
-              <th className="px-2 py-2">Product</th>
-              <th className="px-2 py-2">Variant</th>
-              <th className="px-2 py-2 text-right">PCS</th>
-              <th className="px-2 py-2 text-right">Total Qty</th>
-              <th className="px-2 py-2">UOM</th>
-              <th className="px-2 py-2 text-right">FOB</th>
-              <th className="px-2 py-2 text-right">FOB Unit</th>
-              <th className="px-2 py-2">FOB UOM</th>
-              <th className="px-2 py-2 text-right">Cost</th>
-              <th className="px-2 py-2 text-right">Total Cost</th>
-              <th className="px-2 py-2" />
+              <th className="px-2 py-2">Barcode</th><th className="px-2 py-2">Product</th><th className="px-2 py-2">Variant</th><th className="px-2 py-2 text-right">PCS</th><th className="px-2 py-2 text-right">Total Qty</th><th className="px-2 py-2">UOM</th><th className="px-2 py-2 text-right">FOB</th><th className="px-2 py-2 text-right">FOB Unit</th><th className="px-2 py-2">FOB UOM</th><th className="px-2 py-2 text-right">Cost</th><th className="px-2 py-2 text-right">Total Cost</th><th className="px-2 py-2" />
             </tr>
           </thead>
           <tbody>
@@ -623,6 +690,7 @@ function ReceivingEditor({ receiving, onClose }: { receiving: Receiving | null; 
             </tfoot>
           )}
         </table>
+        </div>{/* end desktop table */}
       </div>
 
       {/* Blocking errors (must fix before posting) */}
@@ -635,22 +703,23 @@ function ReceivingEditor({ receiving, onClose }: { receiving: Receiving | null; 
         </div>
       )}
 
-      {/* Actions */}
+      {/* Actions — sticky on mobile */}
       {!readOnly && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button className="btn-ghost" onClick={addLine}>+ Add row</button>
-          <label className="btn-ghost cursor-pointer">
-            CSV Import
-            <input type="file" accept=".csv" className="hidden" onChange={(e) => e.target.files?.[0] && importCsv(e.target.files[0])} />
-          </label>
-          <button className="btn-ghost" onClick={sampleCsv}>Sample CSV</button>
-          <div className="ml-auto flex gap-2">
-            <button className="btn-ghost" onClick={() => exportReceivingCsv(receivingNo, lines, products, variants)}>Export CSV</button>
-            <button className="btn-ghost" onClick={() => window.print()}>Print / PDF</button>
-            <button className="btn-ghost" onClick={doSaveDraft}>Save draft</button>
-            {can(user?.role, 'receive_stock') && (
-              <button className="btn-primary" onClick={doPost}>Post receiving</button>
-            )}
+        <div className="fixed bottom-16 inset-x-0 z-20 border-t border-ink-100 bg-white px-4 py-3 md:relative md:bottom-auto md:inset-x-auto md:border-0 md:bg-transparent md:p-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn-ghost text-sm" onClick={addLine}>+ Add row</button>
+            <label className="btn-ghost cursor-pointer text-sm">
+              CSV Import
+              <input type="file" accept=".csv" className="hidden" onChange={(e) => e.target.files?.[0] && importCsv(e.target.files[0])} />
+            </label>
+            <button className="btn-ghost text-sm" onClick={sampleCsv}>Sample CSV</button>
+            <div className="ml-auto flex gap-2">
+              <button className="btn-ghost text-sm" onClick={() => exportReceivingCsv(receivingNo, lines, products, variants)}>Export</button>
+              <button className="btn-ghost text-sm" onClick={doSaveDraft}>Save draft</button>
+              {can(user?.role, 'receive_stock') && (
+                <button className="btn-primary text-sm" onClick={doPost}>Post receiving</button>
+              )}
+            </div>
           </div>
         </div>
       )}

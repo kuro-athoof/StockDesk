@@ -106,7 +106,21 @@ service cloud.firestore {
                      && resource.data.status == 'draft';
     }
 
-    // ---- Stock counts: owner-shop scoped; update checks both old and new shopId ----
+    // ---- Damage Reports: staff create, manager/admin approve or reject ----
+    match /damage_reports/{id} {
+      // Warehouse staff, shop managers, and above can create reports for shops they see.
+      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(request.resource.data.shopId)
+                     && request.resource.data.status == 'pending';
+      // Any active user scoped to the shop can read reports.
+      allow read: if canRead() && canSeeShop(resource.data.shopId);
+      // Only Admin/PurchaseMgr can update status (approve/reject) — not warehouse staff.
+      allow update: if (isAdmin() || isPurchaseMgr())
+                     && canSeeShop(resource.data.shopId)
+                     && canSeeShop(request.resource.data.shopId);
+      // Damage reports are never deleted — status changes instead.
+      allow delete: if false;
+    }
     match /stock_counts/{id} {
       allow read: if canRead() && canSeeShop(resource.data.shopId);
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
