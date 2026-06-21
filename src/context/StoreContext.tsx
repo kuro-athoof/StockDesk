@@ -4,7 +4,7 @@ import {
 import type {
   AppUser, Shop, Product, Variant, Balance, Unit, StockLocation,
   Supplier, CountryRate, AuditLog, MovementAction,
-  Receiving, Transfer, StockCount, CostHistory,
+  Receiving, Transfer, StockCount, CostHistory, DamageReport,
 } from '../types';
 import { can } from '../lib/permissions';
 import {
@@ -15,7 +15,7 @@ import {
 import { balanceId, NegativeStockError, applyMovement } from '../lib/movement';
 import { suggestVariantBarcode, isBarcodeTaken } from '../lib/dataQuality';
 import { firebaseConfigured, auth, db, COL } from '../lib/firebase';
-import { repo, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize } from '../lib/firestoreRepo';
+import { repo, subscribe, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize } from '../lib/firestoreRepo';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, writeBatch } from 'firebase/firestore';
 
@@ -111,9 +111,16 @@ interface Store {
   nextCountNo: () => string;
   saveCount: (c: Omit<StockCount, 'id' | 'createdAt' | 'status'> & { id?: string; status?: StockCount['status'] }) => string;
   submitCount: (id: string) => void;
-  approveCount: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  approveCount: (id: string) => Promise<{ ok: boolean; error?: string; conflict?: boolean }>;
+  rejectCount: (id: string, note: string) => void;
   cancelCount: (id: string) => void;
   deleteCountDraft: (id: string) => Promise<{ ok: boolean; error?: string }>;
+
+  // ---- Damage Reports ----
+  damageReports: DamageReport[];
+  createDamageReport: (r: Omit<DamageReport, 'id' | 'reportedAt' | 'status'>) => string;
+  approveDamageReport: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  rejectDamageReport: (id: string, note: string) => void;
   lastFobOf: (variantId: string) => number | undefined;
   recordCost: (entry: Omit<CostHistory, 'id' | 'timestamp' | 'userId'>) => void;
 
@@ -149,6 +156,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [stockCounts, setStockCounts] = useState<StockCount[]>([]);
   const [costHistory, setCostHistory] = useState<CostHistory[]>([]);
+  const [damageReports, setDamageReports] = useState<DamageReport[]>([]);
   const [ready, setReady] = useState<boolean>(!LIVE);
 
   // Live mode: seed once, then attach realtime subscriptions.
@@ -205,6 +213,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         repo.subscribeTransfers(setTransfers),
         repo.subscribeCounts(setStockCounts),
         repo.subscribeCostHistory(setCostHistory),
+        subscribe<DamageReport>(COL.damageReports, setDamageReports),
       ];
       setReady(true);
     })();
@@ -677,14 +686,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const submitCount = useCallback((id: string) => {
     const c = stockCounts.find((x) => x.id === id);
-    if (!c || c.status !== 'open') return;
-    const submitted: StockCount = { ...c, status: 'submitted', submittedAt: Date.now() };
+    // Allow resubmission from rejected status as well as initial open submit.
+    if (!c || (c.status !== 'open' && c.status !== 'rejected')) return;
+    const submitted: StockCount = {
+      ...c,
+      status: 'submitted',
+      submittedAt: Date.now(),
+      // Clear rejection state on resubmit so it doesn't confuse the approver.
+      rejectedAt: undefined,
+      rejectedBy: undefined,
+      // Keep rejectionNote in history for audit trail — do not clear it.
+    };
     writeDoc(COL.counts, id, deepSanitize(submitted as unknown as Record<string, unknown>),
       () => setStockCounts((prev) => prev.map((x) => (x.id === id ? submitted : x))));
   }, [stockCounts, writeDoc]);
 
-  // Approving a count applies each non-zero variance as a STOCK_COUNT_CORRECTION
-  // movement (writes audit + updates balance).
+  // Approving a count sets stock_balances to the submitted physical values absolutely
+  // (not just adding the old variance delta). This prevents drift if stock moved
+  // between submission and approval.
+  //
+  // Conflict detection: if the current balance differs from what was expected at
+  // submit time, block approval with a clear error.
+  //
+  // Structured audit: every COUNT_ADJUSTMENT entry carries countNo, barcode,
+  // oldPcs, newPcs, pcsDelta, oldQty, newQty, qtyDelta, reason, approvedBy.
   const approveCount = useCallback(async (id: string) => {
     const c = stockCounts.find((x) => x.id === id);
     if (!c) return { ok: false, error: 'Count not found' };
@@ -692,39 +717,135 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!can(user?.role, 'approve_adjustment')) return { ok: false, error: 'Not authorized to approve' };
     if (!user) return { ok: false, error: 'Not signed in' };
 
-    // Apply each line's quantity (and roll-count) variance via the movement engine.
+    const ts = Date.now();
+
+    // --- Conflict detection first pass (read-only) ---
+    const conflicts: string[] = [];
     for (const line of c.lines) {
-      if (line.variance === 0 && (line.actualRolls ?? 0) === (line.expectedRolls ?? 0)) continue;
+      const bal = balances.find((b) => b.variantId === line.variantId && b.ownerShopId === c.shopId);
+      const currentQty = Math.round((bal?.quantity ?? 0) * 100) / 100;
+      const currentPcs = bal?.rollCount ?? 0;
+      // If current balance differs from what was snapshot at submit (expectedQuantity/expectedRolls),
+      // stock moved between submit and now — the count is stale.
+      if (
+        Math.abs(currentQty - (line.expectedQuantity ?? 0)) > 0.001 ||
+        currentPcs !== (line.expectedRolls ?? 0)
+      ) {
+        const v = variants.find((x) => x.id === line.variantId);
+        conflicts.push(
+          `${v?.barcode ?? line.variantId}: expected ${line.expectedQuantity} qty / ${line.expectedRolls ?? 0} PCS, ` +
+          `current ${currentQty} qty / ${currentPcs} PCS`,
+        );
+      }
+    }
+    if (conflicts.length > 0) {
+      return {
+        ok: false,
+        error: `Stock changed after this count was submitted. Please recount or refresh count.\n\nConflicts:\n${conflicts.join('\n')}`,
+        conflict: true,
+      };
+    }
+
+    // --- Apply: set balance to physical (actual) values absolutely ---
+    for (const line of c.lines) {
       const variant = variants.find((v) => v.id === line.variantId);
       if (!variant) continue;
-      const rollDelta = (line.actualRolls ?? 0) - (line.expectedRolls ?? 0);
-      const res = await applyLocalMovement({
-        variant, ownerShopId: c.shopId, qtyChanged: line.variance, unit: line.unit,
+
+      const bal = balances.find((b) => b.variantId === line.variantId && b.ownerShopId === c.shopId);
+      const oldQty = Math.round((bal?.quantity ?? 0) * 100) / 100;
+      const oldPcs = bal?.rollCount ?? 0;
+
+      // Absolute target (what warehouse physically counted).
+      const newQty = Math.max(0, Math.round((line.actualQuantity ?? 0) * 100) / 100);
+      const newPcs = Math.max(0, line.actualRolls ?? 0);
+      const qtyDelta = Math.round((newQty - oldQty) * 100) / 100;
+      const pcsDelta = newPcs - oldPcs;
+
+      if (qtyDelta === 0 && pcsDelta === 0) continue; // nothing to change
+
+      // Write new balance directly (absolute set, not delta).
+      const newBal: import('../types').Balance = {
+        ...(bal ?? {
+          id: balanceId(variant.id, c.shopId),
+          variantId: variant.id,
+          productId: variant.productId,
+          ownerShopId: c.shopId,
+          unit: line.unit,
+        }),
+        quantity:  newQty,
+        rollCount: variant.productType === 'general' ? undefined : newPcs,
+        updatedAt: ts,
+      };
+      const bId = balanceId(variant.id, c.shopId);
+
+      // Structured audit entry with all required fields.
+      const auditEntry: import('../types').AuditLog = {
+        id: uid('aud'), timestamp: ts, userId: user.uid, userName: user.name,
         action: 'STOCK_COUNT_CORRECTION',
-        remarks: `Count ${c.countNo}: qty ${line.variance >= 0 ? '+' : ''}${line.variance} ${line.unit}` +
-          (rollDelta ? `, rolls ${rollDelta >= 0 ? '+' : ''}${rollDelta}` : '') + (line.reason ? ` — ${line.reason}` : ''),
+        productId: variant.productId, variantId: variant.id, ownerShopId: c.shopId,
+        qtyBefore: oldQty, qtyChanged: qtyDelta, qtyAfter: newQty,
+        // Structured fields stored in refId + remarks (AuditLog doesn't have dedicated fields,
+        // so we encode them as a JSON string in a custom field via remarks + refId).
         refId: c.countNo,
-        rollDelta: variant.productType === 'general' ? undefined : rollDelta,
-      });
-      if (!res.ok) return { ok: false, error: `Correction failed: ${res.error}` };
-      // Sync variant aggregate for fabric.
+        remarks: JSON.stringify({
+          countNo:    c.countNo,
+          variantId:  variant.id,
+          barcode:    variant.barcode ?? '',
+          oldPcs,     newPcs,     pcsDelta,
+          oldQty,     newQty,     qtyDelta,
+          reason:     line.reason ?? '',
+          approvedBy: user.uid,
+          approvedAt: ts,
+        }),
+      };
+
+      if (LIVE && db) {
+        const batch = writeBatch(db);
+        batch.set(doc(db, COL.balances, bId), deepSanitize(newBal as unknown as Record<string, unknown>));
+        batch.set(doc(db, COL.audit,    auditEntry.id), deepSanitize(auditEntry as unknown as Record<string, unknown>));
+        await batch.commit();
+      } else {
+        setBalances((prev) => {
+          const map = new Map(prev.map((b) => [b.id, b]));
+          map.set(bId, newBal);
+          return [...map.values()];
+        });
+        setAudit((prev) => [auditEntry, ...prev]);
+      }
+
+      // Keep variant metadata in sync.
       if (variant.productType !== 'general') {
         const patch: Partial<Variant> = {
-          rollQty: Math.max(0, (variant.rollQty ?? 0) + rollDelta),
-          totalQty: Math.max(0, Math.round(((variant.totalQty ?? 0) + line.variance) * 100) / 100),
+          rollQty:    newPcs,
+          totalQty:   newQty,
+          totalValue: Math.round(newQty * (variant.cost ?? 0) * 100) / 100,
         };
-        patch.totalValue = Math.round((patch.totalQty ?? 0) * (variant.cost ?? 0) * 100) / 100;
         if (LIVE) {
           const safe = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
           fsPatch(COL.variants, variant.id, safe as Partial<Variant>);
         } else setVariants((prev) => prev.map((v) => (v.id === variant.id ? { ...v, ...patch } : v)));
       }
     }
-    const approved: StockCount = { ...c, status: 'approved', approvedAt: Date.now(), approvedBy: user.uid };
+
+    const approved: StockCount = { ...c, status: 'approved', approvedAt: ts, approvedBy: user.uid };
     writeDoc(COL.counts, id, deepSanitize(approved as unknown as Record<string, unknown>),
       () => setStockCounts((prev) => prev.map((x) => (x.id === id ? approved : x))));
     return { ok: true };
-  }, [stockCounts, variants, user, applyLocalMovement, writeDoc]);
+  }, [stockCounts, variants, balances, user, writeDoc]);
+
+  const rejectCount = useCallback((id: string, note: string) => {
+    const c = stockCounts.find((x) => x.id === id);
+    if (!c || c.status !== 'submitted') return;
+    if (!user) return;
+    // Rejection sends the count back to open so warehouse staff can re-count.
+    const rejected: StockCount = {
+      ...c, status: 'rejected' as const,
+      rejectedAt: Date.now(), rejectedBy: user.uid,
+      rejectionNote: note.trim() || 'Rejected — please recount',
+    };
+    writeDoc(COL.counts, id, deepSanitize(rejected as unknown as Record<string, unknown>),
+      () => setStockCounts((prev) => prev.map((x) => (x.id === id ? rejected : x))));
+  }, [stockCounts, user, writeDoc]);
 
   const cancelCount = useCallback((id: string) => {
     const c = stockCounts.find((x) => x.id === id);
@@ -744,6 +865,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setStockCounts((prev) => prev.filter((x) => x.id !== id));
     return { ok: true };
   }, [stockCounts]);
+
+  // ---- Damage Reports -------------------------------------------------------
+  // Staff create reports (no stock change). Manager/Admin approve (reduces stock) or reject.
+
+  const createDamageReport = useCallback((r: Omit<DamageReport, 'id' | 'reportedAt' | 'status'>) => {
+    const id = uid('dmg');
+    const report: DamageReport = { ...r, id, reportedAt: Date.now(), status: 'pending' };
+    writeDoc(COL.damageReports, id, deepSanitize(report as unknown as Record<string, unknown>),
+      () => setDamageReports((prev) => [report, ...prev]));
+    return id;
+  }, [writeDoc]);
+
+  const approveDamageReport = useCallback(async (id: string): Promise<{ ok: boolean; error?: string }> => {
+    const r = damageReports.find((x) => x.id === id);
+    if (!r) return { ok: false, error: 'Report not found' };
+    if (r.status !== 'pending') return { ok: false, error: 'Only pending reports can be approved' };
+    if (!can(user?.role, 'approve_adjustment')) return { ok: false, error: 'Not authorized' };
+    if (!user) return { ok: false, error: 'Not signed in' };
+    // Now reduce stock.
+    const variant = variants.find((v) => v.id === r.variantId);
+    if (!variant) return { ok: false, error: 'Variant not found' };
+    const res = await applyLocalMovement({
+      variant, ownerShopId: r.shopId, qtyChanged: -r.reportedQty, unit: r.uom,
+      action: 'DAMAGE', rollDelta: variant.productType === 'general' ? undefined : -r.reportedPcs,
+      remarks: `Damage write-off approved: ${r.reason}${r.notes ? ' — ' + r.notes : ''}`,
+      refId: id,
+    });
+    if (!res.ok) return { ok: false, error: res.error };
+    const approved: DamageReport = { ...r, status: 'approved', approvedBy: user.uid, approvedAt: Date.now() };
+    writeDoc(COL.damageReports, id, deepSanitize(approved as unknown as Record<string, unknown>),
+      () => setDamageReports((prev) => prev.map((x) => (x.id === id ? approved : x))));
+    return { ok: true };
+  }, [damageReports, variants, user, applyLocalMovement, writeDoc]);
+
+  const rejectDamageReport = useCallback((id: string, note: string) => {
+    const r = damageReports.find((x) => x.id === id);
+    if (!r || r.status !== 'pending') return;
+    if (!user) return;
+    const rejected: DamageReport = { ...r, status: 'rejected', rejectedBy: user.uid, rejectedAt: Date.now(), rejectionNote: note.trim() || 'Rejected' };
+    writeDoc(COL.damageReports, id, deepSanitize(rejected as unknown as Record<string, unknown>),
+      () => setDamageReports((prev) => prev.map((x) => (x.id === id ? rejected : x))));
+  }, [damageReports, user, writeDoc]);
 
   const addProduct = useCallback((p: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>, vs: Omit<Variant, 'id' | 'productId' | 'createdAt'>[]) => {
     const pid = uid('p'); const ts = Date.now();
@@ -874,7 +1037,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     receivings, transfers, nextReceivingNo, nextTransferNo,
     saveReceivingDraft, postReceiving, cancelReceiving, deleteReceivingDraft,
     saveTransferDraft, sendTransfer, receiveTransfer, cancelTransfer, deleteTransferDraft,
-    stockCounts, costHistory, nextCountNo, saveCount, submitCount, approveCount, cancelCount, deleteCountDraft,
+    stockCounts, costHistory, nextCountNo, saveCount, submitCount, approveCount, rejectCount, cancelCount, deleteCountDraft, damageReports, createDamageReport, approveDamageReport, rejectDamageReport,
     lastFobOf, recordCost,
     allBarcodes, isBarcodeUnique, findDuplicateProduct, findDuplicateVariant, generateBarcodeFor,
   }), [
@@ -890,7 +1053,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     receivings, transfers, nextReceivingNo, nextTransferNo,
     saveReceivingDraft, postReceiving, cancelReceiving, deleteReceivingDraft,
     saveTransferDraft, sendTransfer, receiveTransfer, cancelTransfer, deleteTransferDraft,
-    stockCounts, costHistory, nextCountNo, saveCount, submitCount, approveCount, cancelCount, deleteCountDraft,
+    stockCounts, costHistory, nextCountNo, saveCount, submitCount, approveCount, rejectCount, cancelCount, deleteCountDraft, damageReports, createDamageReport, approveDamageReport, rejectDamageReport,
     lastFobOf, recordCost,
     allBarcodes, isBarcodeUnique, findDuplicateProduct, findDuplicateVariant, generateBarcodeFor,
   ]);

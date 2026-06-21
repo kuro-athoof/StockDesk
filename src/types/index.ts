@@ -180,9 +180,35 @@ export const PRODUCT_TYPE_LABELS: Record<ProductType, string> = {
   general: 'General Inventory',
 };
 
-// ============ Stock Count ============
+// ============ Damage / Issue Reports ============
+// Warehouse staff create these — they do NOT reduce stock directly.
+// Manager/Admin approves (reduces stock + writes DAMAGE audit) or rejects.
 
-export type CountStatus = 'open' | 'submitted' | 'approved' | 'cancelled';
+export type DamageStatus = 'pending' | 'approved' | 'rejected';
+
+export interface DamageReport {
+  id: string;
+  shopId: string;
+  productId: string;
+  variantId: string;
+  barcode?: string;
+  reportedPcs: number;     // rolls / PCS
+  reportedQty: number;     // total quantity
+  uom: string;
+  reason: string;          // Torn | Stained | Wet | Dirty | Defective | Other
+  notes?: string;
+  reportedBy: string;      // user.uid
+  reportedByName: string;  // user.name
+  reportedAt: number;
+  status: DamageStatus;
+  approvedBy?: string;
+  approvedAt?: number;
+  rejectedBy?: string;
+  rejectedAt?: number;
+  rejectionNote?: string;
+}
+
+export type CountStatus = 'open' | 'submitted' | 'approved' | 'rejected' | 'cancelled';
 
 export interface CountLine {
   id: string;
@@ -190,11 +216,12 @@ export interface CountLine {
   productId: string;
   variantId: string;
   unit: string;
-  expectedRolls?: number;
-  actualRolls?: number;
-  expectedQuantity: number;
-  actualQuantity: number;
-  variance: number;          // actualQuantity - expectedQuantity
+  // System (expected) quantities — sourced from stock_balances, NOT variant fields.
+  expectedRolls?: number;   // balance.rollCount  (displayed as "System PCS")
+  actualRolls?: number;     // entered by warehouse staff (displayed as "Physical PCS")
+  expectedQuantity: number; // balance.quantity   (displayed as "System Qty")
+  actualQuantity: number;   // entered by warehouse staff (displayed as "Physical Qty")
+  variance: number;         // actualQuantity - expectedQuantity
   reason?: string;
 }
 
@@ -202,6 +229,9 @@ export interface StockCount {
   id: string;
   countNo: string;           // CNT-0001
   shopId: string;
+  countType: 'full' | 'partial' | 'spot'; // Full Count / Partial Count / Spot Check
+  reference?: string;        // optional reference text
+  notes?: string;            // optional notes
   countedBy: string;
   date: string;
   status: CountStatus;
@@ -210,6 +240,10 @@ export interface StockCount {
   submittedAt?: number;
   approvedAt?: number;
   approvedBy?: string;
+  rejectedAt?: number;
+  rejectedBy?: string;
+  rejectionNote?: string;
+  varianceValueMvr?: number; // computed at submit: Σ |variance × cost|
 }
 
 // ============ Cost history (kept permanently) ============

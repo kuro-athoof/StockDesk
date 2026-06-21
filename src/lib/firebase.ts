@@ -78,4 +78,5 @@ export const COL = {
   settings: 'settings',
   costHistory: 'cost_history',
   activity: 'activity_logs',
+  damageReports: 'damage_reports',
 } as const;

@@ -10,6 +10,7 @@ import { Reports } from './pages/Reports';
 import { Receiving } from './pages/Receiving';
 import { Transfers } from './pages/Transfers';
 import { WarehouseMode } from './pages/WarehouseMode';
+import { Damaged } from './pages/Damaged';
 import { StockCount } from './pages/StockCount';
 import { Administration } from './pages/Administration';
 import { can, type Capability } from './lib/permissions';
@@ -33,6 +34,7 @@ function Routed() {
         <Route path="/receiving" element={<Guard cap="receive_stock"><Receiving /></Guard>} />
         <Route path="/transfers" element={<Guard cap="transfer_stock"><Transfers /></Guard>} />
         <Route path="/warehouse" element={<Guard cap="transfer_stock"><WarehouseMode /></Guard>} />
+        <Route path="/damaged" element={<Guard cap="transfer_stock"><Damaged /></Guard>} />
         <Route path="/stock-count" element={<Guard cap="perform_count"><StockCount /></Guard>} />
 
         {/* Inventory */}

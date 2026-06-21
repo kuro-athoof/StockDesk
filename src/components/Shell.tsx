@@ -15,6 +15,7 @@ const SECTIONS: NavSection[] = [
       { to: '/receiving', label: 'Receive Stock', cap: 'receive_stock' },
       { to: '/transfers', label: 'Move Stock', cap: 'transfer_stock' },
       { to: '/warehouse', label: 'Warehouse Mode', cap: 'transfer_stock' },
+      { to: '/damaged',   label: 'Damaged / Issues', cap: 'transfer_stock' },
       { to: '/stock-count', label: 'Stock Count', cap: 'perform_count' },
     ],
   },
