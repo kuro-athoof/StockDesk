@@ -64,7 +64,7 @@ export function WarehouseMode() {
   const {
     user, variants, products, locations, visibleShopIds, shops, audit, settings,
     balanceOf, scopedBalances, shopName, productName, applyLocalMovement,
-    costHistory, saveCount, nextCountNo, createDamageReport,
+    costHistory, saveCount, nextCountNo, createDamageReport, suppliers,
   } = useStore();
 
   const [shopId, setShopId]         = useState(visibleShopIds[0] ?? '');
@@ -77,6 +77,7 @@ export function WarehouseMode() {
   const [recentScans, setRecentScans] = useState<ScanEntry[]>([]);
   const [activeTab, setActiveTab]   = useState<'scan' | 'recent' | 'activity'>('scan');
   const [soundOn, setSoundOn]       = useState(false);
+  const [showResults, setShowResults] = useState(false); // autocomplete dropdown visibility
 
   // Modal field state — always reset to safe defaults (Fix 7: never default to current qty)
   const [mPcs, setMPcs]             = useState('');
@@ -145,18 +146,71 @@ export function WarehouseMode() {
   };
   const closeModal = () => { setModal(null); refocus(); };
 
+  // ─── Autocomplete search ─────────────────────────────────────────────────
+  // Normalize: lowercase, trim, strip hyphens/spaces so "AURC01" matches "AUR-C01".
+  const norm = (s: string | undefined | null) => (s ?? '').toLowerCase().replace(/[\s-]+/g, '').trim();
+
+  const searchResults = useMemo(() => {
+    const raw = code.trim();
+    if (raw.length < 2) return [];
+    const nq = norm(raw);
+
+    type Scored = { v: Variant; rank: number };
+    const scored: Scored[] = [];
+
+    for (const v of variants) {
+      const prod = products.find((x) => x.id === v.productId);
+      const sup = prod?.supplierId ? suppliers.find((s) => s.id === prod.supplierId) : undefined;
+      const barcodeN = norm(v.barcode);
+      const prodN    = norm(prod?.name);
+      const labelN   = norm(v.label);
+      const colorN   = norm(v.colorName);
+      const ourN     = norm(v.ourColorNumber);
+      const supColN  = norm(v.supplierColorNumber);
+      const catN     = norm(prod?.category);
+      const supN     = norm(sup?.name);
+
+      // Determine best (lowest) rank across all fields.
+      let rank = 99;
+      if (barcodeN && barcodeN === nq) rank = Math.min(rank, 0);              // exact barcode
+      if (barcodeN.startsWith(nq))     rank = Math.min(rank, 1);              // barcode starts-with
+      if (prodN.startsWith(nq))        rank = Math.min(rank, 2);              // product starts-with
+      if (labelN.startsWith(nq) || colorN.startsWith(nq) || ourN.startsWith(nq) || supColN.startsWith(nq))
+                                       rank = Math.min(rank, 3);              // variant/color starts-with
+      if (barcodeN.includes(nq) || prodN.includes(nq) || labelN.includes(nq) ||
+          colorN.includes(nq) || ourN.includes(nq) || supColN.includes(nq) ||
+          catN.includes(nq) || supN.includes(nq))
+                                       rank = Math.min(rank, 4);              // contains anywhere
+
+      if (rank < 99) scored.push({ v, rank });
+    }
+
+    scored.sort((a, b) => a.rank - b.rank || norm(a.v.barcode).localeCompare(norm(b.v.barcode)));
+    return scored.slice(0, 10).map((s) => s.v);
+  }, [code, variants, products, suppliers]);
+
+  // Load a selected variant into the item card.
+  const selectItem = (v: Variant) => {
+    setFound(v); setModal(null); setCode(''); setShowResults(false); setActiveTab('scan');
+    setRecentScans((prev) => [{ variantId: v.id, ts: Date.now() }, ...prev.filter((r) => r.variantId !== v.id)].slice(0, 10));
+    scanRef.current?.focus();
+  };
+
+  // Enter key: exact barcode → load; single result → load; multiple → keep open; none → not found.
   const scan = () => {
     const q = code.trim();
     if (!q) return;
-    const v = variants.find((x) => x.barcode?.toLowerCase() === q.toLowerCase())
-           ?? variants.find((x) => `${productName(x.productId)} ${x.label}`.toLowerCase().includes(q.toLowerCase()) && q.length > 2);
-    if (v) {
-      setFound(v); setModal(null); setCode('');
-      setRecentScans((prev) => [{ variantId: v.id, ts: Date.now() }, ...prev.filter((r) => r.variantId !== v.id)].slice(0, 10));
-    } else {
-      showToast(`Nothing found for "${q}"`, false);
-      setCode('');
-    }
+    const nq = norm(q);
+    // 1. exact barcode match (fast path for scanner input)
+    const exact = variants.find((x) => norm(x.barcode) === nq);
+    if (exact) { selectItem(exact); return; }
+    // 2. single result
+    if (searchResults.length === 1) { selectItem(searchResults[0]); return; }
+    // 3. multiple results → keep dropdown open, highlight first
+    if (searchResults.length > 1) { setShowResults(true); return; }
+    // 4. none
+    showToast(`Item not found: "${q}"`, false);
+    setCode('');
     scanRef.current?.focus();
   };
 
@@ -447,20 +501,66 @@ export function WarehouseMode() {
         </Modal>
       )}
 
-      {/* ── Top scan bar ── */}
-      <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-4 py-2 shadow-sm">
-        {myShops.length > 1 && (
-          <select className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-800"
-            value={shopId} onChange={(e) => setShopId(e.target.value)}>
-            {myShops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+      {/* ── Top scan bar (responsive) ── */}
+      <div className="relative border-b border-gray-200 bg-white px-3 py-2 shadow-sm sm:px-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          {myShops.length > 1 && (
+            <select className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-800 sm:w-auto"
+              value={shopId} onChange={(e) => setShopId(e.target.value)}>
+              {myShops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+          <div className="flex flex-1 gap-2">
+            <input ref={scanRef}
+              className="min-w-0 flex-1 rounded-xl border-2 border-teal-400 bg-white px-4 py-2.5 text-lg font-bold placeholder-gray-300 focus:border-teal-500 focus:outline-none sm:text-xl"
+              placeholder="Scan or search…"
+              value={code}
+              onChange={(e) => { setCode(e.target.value); setShowResults(true); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') scan(); if (e.key === 'Escape') setShowResults(false); }}
+              onFocus={() => setShowResults(true)}
+              autoFocus />
+            <button className="shrink-0 rounded-xl bg-teal-500 px-5 py-2.5 text-sm font-bold text-white active:bg-teal-600" onClick={scan}>FIND</button>
+            <button className={`shrink-0 rounded-xl px-3 py-2.5 text-lg ${soundOn ? 'bg-teal-50 text-teal-600' : 'bg-gray-100 text-gray-400'}`}
+              onClick={() => setSoundOn((s) => !s)} title="Sound">🔔</button>
+          </div>
+        </div>
+
+        {/* ── Autocomplete results dropdown ── */}
+        {showResults && code.trim().length >= 2 && (
+          <>
+            {/* click-away backdrop */}
+            <div className="fixed inset-0 z-30" onClick={() => setShowResults(false)} />
+            <div className="absolute left-3 right-3 top-full z-40 mt-1 max-h-[60vh] overflow-y-auto rounded-2xl border border-gray-200 bg-white shadow-2xl sm:left-auto sm:right-4 sm:w-[480px]">
+              {searchResults.length === 0 ? (
+                <div className="px-4 py-6 text-center text-sm text-gray-400">No matches for "{code.trim()}"</div>
+              ) : (
+                searchResults.map((v, i) => {
+                  const prod = products.find((x) => x.id === v.productId);
+                  const b = scopedBalances.find((x) => x.variantId === v.id && x.ownerShopId === shopId);
+                  const t = b ? stockTone(b.quantity, LOW) : 'red';
+                  return (
+                    <button key={v.id} onClick={() => selectItem(v)}
+                      className={`flex w-full items-center gap-3 border-b border-gray-50 px-4 py-3 text-left last:border-0 hover:bg-teal-50 ${i === 0 ? 'bg-gray-50' : ''}`}>
+                      <span className={`h-3 w-3 shrink-0 rounded-full ${TONE_DOT[t]}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono text-xs font-bold text-gray-500">{v.barcode ?? '—'}</div>
+                        <div className="truncate text-sm font-bold text-gray-900">{prod?.name ?? productName(v.productId)}</div>
+                        <div className="truncate text-xs text-gray-500">
+                          {v.colorName ?? v.label}
+                          {v.ourColorNumber ? ` · #${v.ourColorNumber}` : ''}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className={`text-sm font-bold ${TONE_TEXT[t]}`}>{b?.quantity ?? 0} {b?.unit ?? v.uom}</div>
+                        <div className="text-[11px] text-gray-400">{prod?.type === 'fabric' ? 'Rolls' : 'PCS'}: {b?.rollCount ?? 0}</div>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </>
         )}
-        <input ref={scanRef} className="flex-1 rounded-xl border-2 border-teal-400 bg-white px-4 py-2.5 text-xl font-bold placeholder-gray-300 focus:border-teal-500 focus:outline-none"
-          placeholder="Scan barcode…" value={code} onChange={(e) => setCode(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && scan()} autoFocus />
-        <button className="rounded-xl bg-teal-500 px-5 py-2.5 text-sm font-bold text-white active:bg-teal-600" onClick={scan}>FIND</button>
-        <button className={`rounded-xl px-3 py-2.5 text-lg ${soundOn ? 'bg-teal-50 text-teal-600' : 'bg-gray-100 text-gray-400'}`}
-          onClick={() => setSoundOn((s) => !s)} title="Sound">🔔</button>
       </div>
 
       {/* ── Body ── */}
