@@ -2,6 +2,9 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Identity / role helpers
+    // ─────────────────────────────────────────────────────────────────────────
     function signedIn() { return request.auth != null; }
 
     function userDoc() {
@@ -19,6 +22,10 @@ service cloud.firestore {
 
     function canRead() { return signedIn() && isActive(); }
 
+    // Roles that may approve adjustments (damage write-off, stock-count corrections).
+    // Mirrors permissions.ts: only admin + purchase_manager hold 'approve_adjustment'.
+    function canApprove() { return isAdmin() || isPurchaseMgr(); }
+
     // Roles that see every shop's data.
     function seesAllShops() { return isAdmin() || isPurchaseMgr() || isAuditor(); }
 
@@ -27,21 +34,48 @@ service cloud.firestore {
       return seesAllShops() || (signedIn() && isActive() && shopId in assignedShops());
     }
 
-    // ---- Users: self-read for profile load; admin/auditor read all; admin writes ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Validation helpers
+    // ─────────────────────────────────────────────────────────────────────────
+    // A field is unchanged between the existing doc and the incoming write.
+    function unchanged(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+    // A numeric field is present and a non-negative number.
+    function nonNegNumber(m, field) {
+      return m[field] is number && m[field] >= 0;
+    }
+    // A field is a non-empty string.
+    function nonEmptyString(m, field) {
+      return m[field] is string && m[field].size() > 0;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Users: self-read for profile load; admin/auditor read all; admin writes
+    // ─────────────────────────────────────────────────────────────────────────
     match /users/{uid} {
       allow read: if signedIn() && (request.auth.uid == uid || isAdmin() || isAuditor());
       allow create, update, delete: if isAdmin();
     }
 
-    // ---- Reference data: all active users read; admin/purchase manage ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Reference data: all active users read; admin/purchase manage
+    // (cost_history below is cost-sensitive — readers restricted)
+    // ─────────────────────────────────────────────────────────────────────────
     match /shops/{id}         { allow read: if canRead(); allow write: if isAdmin(); }
     match /units/{id}         { allow read: if canRead(); allow write: if isAdmin(); }
     match /locations/{id}     { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
     match /suppliers/{id}     { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
-    match /country_rates/{id} { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
+    // Country rates are cost-sensitive: only cost-visible roles may read.
+    match /country_rates/{id} {
+      allow read: if isAdmin() || isPurchaseMgr() || isShopMgr() || isAuditor();
+      allow write: if isAdmin() || isPurchaseMgr();
+    }
     match /settings/{id}      { allow read: if canRead(); allow write: if isAdmin(); }
 
-    // ---- Products & variants: all read; admin/purchase manage ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Products & variants: all read; admin/purchase manage
+    // ─────────────────────────────────────────────────────────────────────────
     match /products/{id} {
       allow read: if canRead();
       allow write: if isAdmin() || isPurchaseMgr();
@@ -51,90 +85,182 @@ service cloud.firestore {
       allow write: if isAdmin() || isPurchaseMgr();
     }
 
-    // ---- Stock balances: scoped reads; writes only by stock-moving roles ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Stock balances: scoped reads; writes only by stock-moving roles.
+    // Numeric validation + immutable identity fields.
+    // ─────────────────────────────────────────────────────────────────────────
     match /stock_balances/{id} {
       allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
-                     && canSeeShop(request.resource.data.ownerShopId);
+                     && canSeeShop(request.resource.data.ownerShopId)
+                     && nonNegNumber(request.resource.data, 'quantity')
+                     && nonEmptyString(request.resource.data, 'variantId')
+                     && nonEmptyString(request.resource.data, 'ownerShopId');
       allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse())
                      && canSeeShop(resource.data.ownerShopId)
-                     && canSeeShop(request.resource.data.ownerShopId);
+                     && canSeeShop(request.resource.data.ownerShopId)
+                     && nonNegNumber(request.resource.data, 'quantity')
+                     // identity of a balance row is immutable
+                     && unchanged('variantId')
+                     && unchanged('productId');
       allow delete: if false;
     }
 
-    // ---- Audit logs: append-only, scoped reads, never edited or deleted ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Audit logs: append-only, scoped reads, never edited or deleted.
+    // Required fields enforced on create.
+    // ─────────────────────────────────────────────────────────────────────────
     match /audit_logs/{id} {
       allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
-                     && canSeeShop(request.resource.data.ownerShopId);
+                     && canSeeShop(request.resource.data.ownerShopId)
+                     && nonEmptyString(request.resource.data, 'action')
+                     && nonEmptyString(request.resource.data, 'variantId')
+                     && request.resource.data.qtyChanged is number
+                     // the recorded actor must be the caller (no forged authorship)
+                     && request.resource.data.userId == request.auth.uid;
       allow update, delete: if false; // immutable / append-only
     }
 
-    // ---- Cost history: kept permanently; owner-shop scoped; never edited ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Cost history: COST-SENSITIVE. Only cost-visible roles may read.
+    // Warehouse staff are explicitly excluded (lack view_costs).
+    // Immutable once written.
+    // ─────────────────────────────────────────────────────────────────────────
     match /cost_history/{id} {
-      allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
+      allow read: if (isAdmin() || isPurchaseMgr() || isShopMgr() || isAuditor())
+                   && canSeeShop(resource.data.ownerShopId);
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
                      && canSeeShop(request.resource.data.ownerShopId);
       allow update, delete: if false; // immutable cost record
     }
 
-    // ---- Receivings: owner-shop scoped on read AND write ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Receivings: owner-shop scoped. Status transitions enforced.
+    //   draft → posted | cancelled   (no jumping back from posted)
+    //   posted/cancelled are terminal (immutable except via explicit allowed path)
+    // ─────────────────────────────────────────────────────────────────────────
     match /receivings/{id} {
       allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
-                     && canSeeShop(request.resource.data.ownerShopId);
+                     && canSeeShop(request.resource.data.ownerShopId)
+                     && request.resource.data.status == 'draft'
+                     && nonEmptyString(request.resource.data, 'ownerShopId');
       allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse())
                      && canSeeShop(resource.data.ownerShopId)
-                     && canSeeShop(request.resource.data.ownerShopId);
+                     && canSeeShop(request.resource.data.ownerShopId)
+                     && unchanged('ownerShopId')
+                     // legal transitions only: from draft → {draft, posted, cancelled}
+                     && resource.data.status == 'draft';
       // Hard-delete is only permitted for drafts (not posted history).
       allow delete: if (isAdmin() || isPurchaseMgr() || isWarehouse())
                      && canSeeShop(resource.data.ownerShopId)
                      && resource.data.status == 'draft';
     }
 
-    // ---- Transfers: scoped by source owner shop; update checks both old and new fromShopId ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Transfers: scoped by source owner shop. Status transitions enforced.
+    //   draft → sent → received   (monotonic; no reversing)
+    //   fromShopId immutable after creation.
+    // ─────────────────────────────────────────────────────────────────────────
     match /transfers/{id} {
       allow read: if canRead() && canSeeShop(resource.data.fromShopId);
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
-                     && canSeeShop(request.resource.data.fromShopId);
+                     && canSeeShop(request.resource.data.fromShopId)
+                     && request.resource.data.status == 'draft'
+                     && nonEmptyString(request.resource.data, 'fromShopId');
       allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(resource.data.fromShopId)
-                     && canSeeShop(request.resource.data.fromShopId);
+                     && canSeeShop(request.resource.data.fromShopId)
+                     && unchanged('fromShopId')
+                     // legal transitions: draft→sent, sent→received (no skipping back)
+                     && (
+                          (resource.data.status == 'draft' && request.resource.data.status in ['draft', 'sent', 'cancelled'])
+                       || (resource.data.status == 'sent'  && request.resource.data.status in ['sent', 'received'])
+                     );
       // Hard-delete only for drafts (not sent/received moves).
       allow delete: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(resource.data.fromShopId)
                      && resource.data.status == 'draft';
     }
 
-    // ---- Damage Reports: staff create, manager/admin approve or reject ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Damage Reports: staff create (pending), manager/admin approve or reject.
+    //   pending → approved | rejected   (terminal once decided)
+    //   Approval/rejection fields cannot be forged: only approvers set them,
+    //   and the recorded approver must be the caller.
+    // ─────────────────────────────────────────────────────────────────────────
     match /damage_reports/{id} {
-      // Warehouse staff, shop managers, and above can create reports for shops they see.
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(request.resource.data.shopId)
-                     && request.resource.data.status == 'pending';
-      // Any active user scoped to the shop can read reports.
+                     && request.resource.data.status == 'pending'
+                     && nonNegNumber(request.resource.data, 'reportedQty')
+                     && nonEmptyString(request.resource.data, 'reason')
+                     && nonEmptyString(request.resource.data, 'variantId')
+                     // reporter identity must be the caller
+                     && request.resource.data.reportedBy == request.auth.uid;
       allow read: if canRead() && canSeeShop(resource.data.shopId);
-      // Only Admin/PurchaseMgr can update status (approve/reject) — not warehouse staff.
-      allow update: if (isAdmin() || isPurchaseMgr())
+      // Only Admin/PurchaseMgr can decide a report — and only from pending.
+      allow update: if canApprove()
                      && canSeeShop(resource.data.shopId)
-                     && canSeeShop(request.resource.data.shopId);
-      // Damage reports are never deleted — status changes instead.
+                     && unchanged('shopId')
+                     && unchanged('variantId')
+                     && unchanged('reportedQty')
+                     && unchanged('reportedPcs')
+                     && unchanged('reportedBy')
+                     && unchanged('reportedAt')
+                     && resource.data.status == 'pending'
+                     && request.resource.data.status in ['approved', 'rejected']
+                     // approver / rejecter identity must be the caller (no forgery)
+                     && (request.resource.data.status != 'approved'
+                          || request.resource.data.approvedBy == request.auth.uid)
+                     && (request.resource.data.status != 'rejected'
+                          || request.resource.data.rejectedBy == request.auth.uid);
       allow delete: if false;
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Stock counts: staff create/save/submit; manager/admin approve or reject.
+    //   open ↔ submitted, submitted → approved | rejected, rejected → submitted
+    //   Approval is restricted to approvers; approver identity not forgeable.
+    // ─────────────────────────────────────────────────────────────────────────
     match /stock_counts/{id} {
       allow read: if canRead() && canSeeShop(resource.data.shopId);
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
-                     && canSeeShop(request.resource.data.shopId);
+                     && canSeeShop(request.resource.data.shopId)
+                     && nonEmptyString(request.resource.data, 'shopId')
+                     && request.resource.data.status in ['open', 'submitted'];
       allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(resource.data.shopId)
-                     && canSeeShop(request.resource.data.shopId);
+                     && canSeeShop(request.resource.data.shopId)
+                     && unchanged('shopId')
+                     && (
+                          // staff edits + submit + recount cycle (no approval)
+                          (
+                            (resource.data.status == 'open' && request.resource.data.status in ['open', 'submitted', 'cancelled'])
+                            || (resource.data.status == 'rejected' && request.resource.data.status in ['rejected', 'submitted'])
+                            || (resource.data.status == 'submitted' && request.resource.data.status in ['submitted', 'open'])
+                          )
+                          // approval / rejection — approvers only
+                          || (
+                            canApprove()
+                            && resource.data.status == 'submitted'
+                            && request.resource.data.status in ['approved', 'rejected']
+                            && (request.resource.data.status != 'approved'
+                                 || request.resource.data.approvedBy == request.auth.uid)
+                            && (request.resource.data.status != 'rejected'
+                                 || request.resource.data.rejectedBy == request.auth.uid)
+                          )
+                     );
       // Hard-delete only for open counts (not submitted/approved counts).
       allow delete: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(resource.data.shopId)
                      && resource.data.status == 'open';
     }
 
-    // ---- Notifications ----
+    // ─────────────────────────────────────────────────────────────────────────
+    // Notifications
+    // ─────────────────────────────────────────────────────────────────────────
     match /notifications/{id} {
       allow read: if canRead();
       allow create, update: if isAdmin() || isPurchaseMgr();

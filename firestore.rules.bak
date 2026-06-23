@@ -1,0 +1,144 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function role() { return userDoc().role; }
+    function isActive() { return userDoc().active == true; }
+    function assignedShops() { return userDoc().assignedShopIds; }
+
+    function isAdmin()       { return signedIn() && isActive() && role() == 'admin'; }
+    function isPurchaseMgr() { return signedIn() && isActive() && role() == 'purchase_manager'; }
+    function isShopMgr()     { return signedIn() && isActive() && role() == 'shop_manager'; }
+    function isWarehouse()   { return signedIn() && isActive() && role() == 'warehouse_staff'; }
+    function isAuditor()     { return signedIn() && isActive() && role() == 'auditor'; }
+
+    function canRead() { return signedIn() && isActive(); }
+
+    // Roles that see every shop's data.
+    function seesAllShops() { return isAdmin() || isPurchaseMgr() || isAuditor(); }
+
+    // True if the user may see data owned by `shopId`.
+    function canSeeShop(shopId) {
+      return seesAllShops() || (signedIn() && isActive() && shopId in assignedShops());
+    }
+
+    // ---- Users: self-read for profile load; admin/auditor read all; admin writes ----
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin() || isAuditor());
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---- Reference data: all active users read; admin/purchase manage ----
+    match /shops/{id}         { allow read: if canRead(); allow write: if isAdmin(); }
+    match /units/{id}         { allow read: if canRead(); allow write: if isAdmin(); }
+    match /locations/{id}     { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
+    match /suppliers/{id}     { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
+    match /country_rates/{id} { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
+    match /settings/{id}      { allow read: if canRead(); allow write: if isAdmin(); }
+
+    // ---- Products & variants: all read; admin/purchase manage ----
+    match /products/{id} {
+      allow read: if canRead();
+      allow write: if isAdmin() || isPurchaseMgr();
+    }
+    match /variants/{id} {
+      allow read: if canRead();
+      allow write: if isAdmin() || isPurchaseMgr();
+    }
+
+    // ---- Stock balances: scoped reads; writes only by stock-moving roles ----
+    match /stock_balances/{id} {
+      allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
+      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
+                     && canSeeShop(request.resource.data.ownerShopId);
+      allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse())
+                     && canSeeShop(resource.data.ownerShopId)
+                     && canSeeShop(request.resource.data.ownerShopId);
+      allow delete: if false;
+    }
+
+    // ---- Audit logs: append-only, scoped reads, never edited or deleted ----
+    match /audit_logs/{id} {
+      allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
+      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(request.resource.data.ownerShopId);
+      allow update, delete: if false; // immutable / append-only
+    }
+
+    // ---- Cost history: kept permanently; owner-shop scoped; never edited ----
+    match /cost_history/{id} {
+      allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
+      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
+                     && canSeeShop(request.resource.data.ownerShopId);
+      allow update, delete: if false; // immutable cost record
+    }
+
+    // ---- Receivings: owner-shop scoped on read AND write ----
+    match /receivings/{id} {
+      allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
+      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
+                     && canSeeShop(request.resource.data.ownerShopId);
+      allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse())
+                     && canSeeShop(resource.data.ownerShopId)
+                     && canSeeShop(request.resource.data.ownerShopId);
+      // Hard-delete is only permitted for drafts (not posted history).
+      allow delete: if (isAdmin() || isPurchaseMgr() || isWarehouse())
+                     && canSeeShop(resource.data.ownerShopId)
+                     && resource.data.status == 'draft';
+    }
+
+    // ---- Transfers: scoped by source owner shop; update checks both old and new fromShopId ----
+    match /transfers/{id} {
+      allow read: if canRead() && canSeeShop(resource.data.fromShopId);
+      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(request.resource.data.fromShopId);
+      allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(resource.data.fromShopId)
+                     && canSeeShop(request.resource.data.fromShopId);
+      // Hard-delete only for drafts (not sent/received moves).
+      allow delete: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(resource.data.fromShopId)
+                     && resource.data.status == 'draft';
+    }
+
+    // ---- Damage Reports: staff create, manager/admin approve or reject ----
+    match /damage_reports/{id} {
+      // Warehouse staff, shop managers, and above can create reports for shops they see.
+      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(request.resource.data.shopId)
+                     && request.resource.data.status == 'pending';
+      // Any active user scoped to the shop can read reports.
+      allow read: if canRead() && canSeeShop(resource.data.shopId);
+      // Only Admin/PurchaseMgr can update status (approve/reject) — not warehouse staff.
+      allow update: if (isAdmin() || isPurchaseMgr())
+                     && canSeeShop(resource.data.shopId)
+                     && canSeeShop(request.resource.data.shopId);
+      // Damage reports are never deleted — status changes instead.
+      allow delete: if false;
+    }
+    match /stock_counts/{id} {
+      allow read: if canRead() && canSeeShop(resource.data.shopId);
+      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(request.resource.data.shopId);
+      allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(resource.data.shopId)
+                     && canSeeShop(request.resource.data.shopId);
+      // Hard-delete only for open counts (not submitted/approved counts).
+      allow delete: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+                     && canSeeShop(resource.data.shopId)
+                     && resource.data.status == 'open';
+    }
+
+    // ---- Notifications ----
+    match /notifications/{id} {
+      allow read: if canRead();
+      allow create, update: if isAdmin() || isPurchaseMgr();
+      allow delete: if isAdmin();
+    }
+  }
+}

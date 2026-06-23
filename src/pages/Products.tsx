@@ -34,6 +34,7 @@ export function Products() {
   const [detail, setDetail] = useState<Product | null>(null);
 
   const editable = !!user && can(user.role, 'manage_products');
+  const showCosts = can(user?.role, 'view_costs'); // Phase 2: cost visibility gate
 
   const filtered = useMemo(() => products.filter((p) => {
     if (tab !== 'all' && p.type !== tab) return false;
@@ -91,10 +92,12 @@ export function Products() {
                     <div className="text-[10px] font-semibold uppercase text-ink-400">Qty</div>
                     <div className="text-sm font-bold text-ink-800">{isGeneral ? genQty : summary.totalQuantity}</div>
                   </div>
+                  {showCosts && (
                   <div className="rounded-lg bg-ink-50 p-2">
                     <div className="text-[10px] font-semibold uppercase text-ink-400">Value</div>
                     <div className="text-sm font-bold text-teal-700">{isGeneral ? '—' : `${(summary.inventoryValueMvr / 1000).toFixed(1)}k`}</div>
                   </div>
+                  )}
                 </div>
                 {p.active === false && <div className="mt-2"><Badge tone="out">Inactive</Badge></div>}
               </div>
@@ -258,7 +261,8 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
   const [selectedVariant, setSelectedVariant] = useState<string | null>(variants[0]?.id ?? null);
   const [tab, setTab] = useState<'receipts' | 'transfers' | 'history'>('receipts');
   const isGeneral = product.type === 'general';
-  const { audit, scopedBalances } = useStore();
+  const { audit, scopedBalances, user } = useStore();
+  const showCosts = can(user?.role, 'view_costs'); // Phase 2: hide cost/value from warehouse staff
 
   const lastOf = (variantId: string, action: string) =>
     audit.filter((a) => a.variantId === variantId && a.action === action).sort((a, b) => b.timestamp - a.timestamp)[0];
@@ -305,7 +309,7 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
         <SummaryCard label="Variants" value={isGeneral ? `${variants.length} Items` : `${variants.length} Colors`} />
         <SummaryCard label="PCS" value={isGeneral ? '—' : String(summary.totalPcs)} />
         <SummaryCard label="Total Quantity" value={`${summary.totalQuantity.toLocaleString()}${summary.unit ? ' ' + summary.unit : ''}`} />
-        <SummaryCard label="Total Value" value={`${summary.inventoryValueMvr.toLocaleString(undefined, { minimumFractionDigits: 2 })} MVR`} accent />
+        {showCosts && <SummaryCard label="Total Value" value={`${summary.inventoryValueMvr.toLocaleString(undefined, { minimumFractionDigits: 2 })} MVR`} accent />}
       </div>
 
       {isGeneral
@@ -321,7 +325,7 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-ink-100 text-left text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                  <th className="pb-2">Barcode</th><th className="pb-2">Variant</th><th className="pb-2 text-right">PCS</th><th className="pb-2 text-right">Total Qty</th><th className="pb-2 text-right">Cost</th><th className="pb-2 text-right">Value</th><th className="pb-2">Status</th><th />
+                  <th className="pb-2">Barcode</th><th className="pb-2">Variant</th><th className="pb-2 text-right">PCS</th><th className="pb-2 text-right">Total Qty</th>{showCosts && <th className="pb-2 text-right">Cost</th>}{showCosts && <th className="pb-2 text-right">Value</th>}<th className="pb-2">Status</th><th />
                 </tr>
               </thead>
               <tbody>
@@ -341,8 +345,8 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
                       </td>
                       <td className="py-2 text-right text-ink-600">{balPcs}</td>
                       <td className="py-2 text-right text-ink-700">{balQty} {v.uom ?? ''}</td>
-                      <td className="py-2 text-right text-ink-600">{v.cost != null ? v.cost.toFixed(2) : '—'}</td>
-                      <td className="py-2 text-right font-semibold text-ink-800">{balValue.toLocaleString()}</td>
+                      {showCosts && <td className="py-2 text-right text-ink-600">{v.cost != null ? v.cost.toFixed(2) : '—'}</td>}
+                      {showCosts && <td className="py-2 text-right font-semibold text-ink-800">{balValue.toLocaleString()}</td>}
                       <td className="py-2">{v.active === false ? <Badge tone="out">Inactive</Badge> : <Badge tone="ok">Active</Badge>}</td>
                       <td className="py-2 text-right">{editable && <button className="text-xs text-teal-600" onClick={(e) => { e.stopPropagation(); setEditVariant(v); }}>Edit</button>}</td>
                     </tr>
@@ -352,10 +356,10 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
               </tbody>
             </table>
             {variants.length > 0 && (
-              <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg bg-ink-50 p-3 text-center text-xs">
+              <div className={`mt-3 grid gap-2 rounded-lg bg-ink-50 p-3 text-center text-xs ${showCosts ? 'grid-cols-3' : 'grid-cols-2'}`}>
                 <div><div className="text-ink-400">PCS</div><div className="font-bold text-ink-800">{summary.totalPcs}</div></div>
                 <div><div className="text-ink-400">Quantity</div><div className="font-bold text-ink-800">{summary.totalQuantity} {summary.unit}</div></div>
-                <div><div className="text-ink-400">Value</div><div className="font-bold text-ink-800">{summary.inventoryValueMvr.toLocaleString()}</div></div>
+                {showCosts && <div><div className="text-ink-400">Value</div><div className="font-bold text-ink-800">{summary.inventoryValueMvr.toLocaleString()}</div></div>}
               </div>
             )}
           </div>
@@ -382,10 +386,10 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
                           <Detail label="Total Qty" value={`${Math.round(balQty * 100) / 100} ${v.uom ?? ''}`} />
                         </>);
                       })()}
-                      <Detail label="Cost" value={v.cost != null ? `${v.cost.toFixed(2)} MVR` : '—'} />
-                      <Detail label="Total Value" value={`${Math.round(
+                      {showCosts && <Detail label="Cost" value={v.cost != null ? `${v.cost.toFixed(2)} MVR` : '—'} />}
+                      {showCosts && <Detail label="Total Value" value={`${Math.round(
                         Math.round(scopedBalances.filter((b) => b.variantId === v.id).reduce((s, b) => s + b.quantity, 0) * 100) / 100
-                        * (v.cost ?? 0) * 100) / 100} MVR`} />
+                        * (v.cost ?? 0) * 100) / 100} MVR`} />}
                       <Detail label="UOM" value={v.uom ?? '—'} />
                       <Detail label="Last Receive" value={lastRcv ? new Date(lastRcv.timestamp).toLocaleDateString() : '—'} />
                       <Detail label="Last Transfer" value={lastTrf ? new Date(lastTrf.timestamp).toLocaleDateString() : '—'} />
@@ -414,13 +418,15 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
             <h4 className="mb-2 text-sm font-bold text-ink-900">Product Summary</h4>
             <SummaryRow label="PCS" value={String(summary.totalPcs)} />
             <SummaryRow label="Total Quantity" value={`${summary.totalQuantity} ${summary.unit}`} />
-            <SummaryRow label="Average Cost / Unit" value={`${avgCost.toFixed(2)} MVR`} />
-            <SummaryRow label="Total Value" value={`${summary.inventoryValueMvr.toLocaleString(undefined, { minimumFractionDigits: 2 })} MVR`} />
+            {showCosts && <SummaryRow label="Average Cost / Unit" value={`${avgCost.toFixed(2)} MVR`} />}
+            {showCosts && <SummaryRow label="Total Value" value={`${summary.inventoryValueMvr.toLocaleString(undefined, { minimumFractionDigits: 2 })} MVR`} />}
           </div>
+          {showCosts && (
           <div className="card p-4">
             <h4 className="mb-2 text-sm font-bold text-ink-900">Costing Information</h4>
             <CostingInfo variants={variants} productId={product.id} scopedBalances={scopedBalances} />
           </div>
+          )}
           <div className="card p-4">
             <h4 className="mb-2 text-sm font-bold text-ink-900">Quick Actions</h4>
             <div className="grid grid-cols-2 gap-2 text-xs">

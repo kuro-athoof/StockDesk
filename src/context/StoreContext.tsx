@@ -12,7 +12,7 @@ import {
   DEMO_LOCATIONS, DEMO_SUPPLIERS, DEMO_RATES, DEMO_AUDIT, DEMO_CATEGORIES,
   DEMO_SETTINGS, type AppSettings, loginByUid,
 } from '../lib/demoData';
-import { balanceId, NegativeStockError, applyMovement } from '../lib/movement';
+import { balanceId, NegativeStockError, applyMovement, applyAtomicBatch, DuplicateOperationError, type MovementLineSpec } from '../lib/movement';
 import { suggestVariantBarcode, isBarcodeTaken } from '../lib/dataQuality';
 import { firebaseConfigured, auth, db, COL } from '../lib/firebase';
 import { repo, subscribe, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize } from '../lib/firestoreRepo';
@@ -182,18 +182,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Live mode: once a user is authenticated, optionally seed (admin/purchase
-  // only, since rules require write capability) then attach subscriptions.
-  // Security rules require an active profile, so this MUST run after auth.
+  // Live mode: once a user is authenticated, attach subscriptions.
+  // PRODUCTION SAFETY: demo data is NEVER auto-seeded in production. Seeding only
+  // runs in development builds (import.meta.env.DEV) AND only when explicitly
+  // enabled via VITE_ALLOW_DEMO_SEED. An empty production database stays empty.
   useEffect(() => {
     if (!LIVE || !user) return;
     let unsubs: Array<() => void> = [];
     let cancelled = false;
     (async () => {
-      // Only privileged roles may write reference data; others just read.
-      if (can(user.role, 'manage_products') || user.role === 'admin') {
+      const allowSeed = import.meta.env.DEV && import.meta.env.VITE_ALLOW_DEMO_SEED === 'true';
+      if (allowSeed && (can(user.role, 'manage_products') || user.role === 'admin')) {
         try { await seedIfEmpty(); }
-        catch (e) { console.warn('[StockDesk] seed skipped:', e); }
+        catch (e) { console.warn('[StockDesk] dev seed skipped:', e); }
       }
       if (cancelled) return;
       unsubs = [
@@ -440,15 +441,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       balanceWrites.push(balanceEntry);
 
-      // Variant aggregate update — only write fields with defined values.
+      // Variant aggregate update — DISPLAY METADATA ONLY (not operational source).
+      // Phase 7: derive the aggregate from the authoritative balance (newQty/newRolls
+      // computed above from stock_balances), NOT from the variant's own previous
+      // aggregate. This makes the display field self-heal from the source of truth
+      // and prevents drift after count corrections.
       if (!isGeneral) {
         const prev = variantPatches.get(variant.id) ?? {};
-        const prevPcs = (prev.rollQty ?? variant.rollQty) ?? 0;
-        const prevTotalQty = (prev.totalQty ?? variant.totalQty) ?? 0;
-        const nextTotalQty = Math.round((prevTotalQty + line.quantity) * 100) / 100;
+        const nextTotalQty = newQty; // from balance accumulation (source of truth)
+        const nextRolls = balanceEntry.rollCount ?? 0; // from balance accumulation
         const patch: Partial<Variant> = {
           ...prev,
-          rollQty: prevPcs + pcs,
+          rollQty: nextRolls,
           uom: stockUom,
           totalQty: nextTotalQty,
           cost,
@@ -573,6 +577,76 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return { ok: false, error: 'Ownership transfer requires manager approval' };
     }
 
+    // Phase 4 (Production Safety): apply ALL lines atomically. In LIVE mode the
+    // balance changes, audit logs, and the transfer status flip happen in ONE
+    // Firestore transaction guarded by expectStatus 'draft' — so a duplicate send
+    // click is rejected (DuplicateOperationError) and a mid-line failure rolls back
+    // everything. Internal moves (location-only) keep the per-line path since they
+    // do not change quantities.
+    if (LIVE && trf.type !== 'internal') {
+      const lines: MovementLineSpec[] = [];
+      for (const line of trf.lines) {
+        const variant = variants.find((v) => v.id === line.variantId);
+        if (!variant) return { ok: false, error: 'Variant missing for a line' };
+        const isGeneral = variant.productType === 'general';
+        if (trf.type === 'ownership') {
+          lines.push({
+            variant, ownerShopId: trf.fromShopId, qtyChanged: -line.quantity, unit: line.unit,
+            rollDelta: isGeneral ? undefined : -(line.rollQty ?? 0),
+            remarks: `Move ${trf.transferNo}: godown ownership → ${shopName(trf.toShopId)}${line.rollQty ? `, ${line.rollQty} PCS` : ''}`,
+          });
+          lines.push({
+            variant, ownerShopId: trf.toShopId, qtyChanged: line.quantity, unit: line.unit,
+            rollDelta: isGeneral ? undefined : (line.rollQty ?? 0),
+            remarks: `Move ${trf.transferNo}: godown ownership ← ${shopName(trf.fromShopId)}${line.rollQty ? `, ${line.rollQty} PCS` : ''}`,
+          });
+        } else {
+          lines.push({
+            variant, ownerShopId: trf.fromShopId, qtyChanged: -line.quantity, unit: line.unit,
+            rollDelta: isGeneral ? undefined : -(line.rollQty ?? 0),
+            remarks: `Move ${trf.transferNo}: transferred out of godown${line.remarks ? ' — ' + line.remarks : ''}`,
+          });
+        }
+      }
+      const canOverride = !!user && can(user.role, 'override_negative');
+      try {
+        // Ensure the draft exists in Firestore so the status guard can read it.
+        await new Promise<void>((resolve) => writeDoc(COL.transfers, trf!.id,
+          deepSanitize(trf as unknown as Record<string, unknown>), () => resolve()));
+        await applyAtomicBatch({
+          lines, action: trf.type === 'ownership' ? 'OWNERSHIP_TRANSFER' : 'TRANSFER_OUT',
+          user: user!, refId: trf.transferNo, canOverride,
+          statusDoc: { collection: COL.transfers, id: trf.id, expectStatus: 'draft', newFields: { status: 'sent', sentAt: Date.now() } },
+        });
+      } catch (e) {
+        if (e instanceof DuplicateOperationError) return { ok: false, error: e.message };
+        if (e instanceof NegativeStockError) return { ok: false, error: e.message, needsOverride: true };
+        return { ok: false, error: (e as Error).message };
+      }
+      // Sync local state + variant aggregate (display metadata only).
+      const sentTrf: Transfer = { ...trf, status: 'sent', sentAt: Date.now() };
+      setTransfers((prev) => {
+        const exists = prev.some((x) => x.id === trf!.id);
+        return exists ? prev.map((x) => (x.id === trf!.id ? sentTrf : x)) : [sentTrf, ...prev];
+      });
+      if (trf.type === 'transfer_out') {
+        for (const line of trf.lines) {
+          const variant = variants.find((v) => v.id === line.variantId);
+          if (variant && variant.productType !== 'general') {
+            const nextTotalQty = Math.max(0, Math.round(((variant.totalQty ?? 0) - line.quantity) * 100) / 100);
+            const safe = Object.fromEntries(Object.entries({
+              rollQty: Math.max(0, (variant.rollQty ?? 0) - (line.rollQty ?? 0)),
+              totalQty: nextTotalQty,
+              totalValue: Math.round(nextTotalQty * (variant.cost ?? 0) * 100) / 100,
+              lastTransferDate: Date.now(),
+            }).filter(([, v]) => v !== undefined));
+            fsPatch(COL.variants, variant.id, safe as Partial<Variant>);
+          }
+        }
+      }
+      return { ok: true };
+    }
+
     for (const line of trf.lines) {
       const variant = variants.find((v) => v.id === line.variantId);
       if (!variant) return { ok: false, error: 'Variant missing for a line' };
@@ -617,11 +691,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rollDelta: variant.productType === 'general' ? undefined : -(line.rollQty ?? 0),
         });
         if (!res.ok) return { ok: false, error: `Line failed: ${res.error}`, needsOverride: res.needsOverride };
-        // Decrement the variant's aggregate stock (fabric source of truth).
+        // Sync variant DISPLAY aggregate (not operational source). Phase 7: derive
+        // from the post-move balance so the display field can't drift from truth.
         if (variant.productType !== 'general') {
-          const nextTotalQty = Math.max(0, Math.round(((variant.totalQty ?? 0) - line.quantity) * 100) / 100);
+          const postBal = balanceOf(variant.id, trf.fromShopId);
+          const nextTotalQty = Math.max(0, Math.round(((postBal?.quantity ?? 0)) * 100) / 100);
           const patch: Partial<Variant> = {
-            rollQty: Math.max(0, (variant.rollQty ?? 0) - (line.rollQty ?? 0)),
+            rollQty: Math.max(0, postBal?.rollCount ?? 0),
             totalQty: nextTotalQty,
             totalValue: Math.round(nextTotalQty * (variant.cost ?? 0) * 100) / 100,
             lastTransferDate: Date.now(),
@@ -642,7 +718,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     });
     return { ok: true };
-  }, [transfers, variants, applyLocalMovement, writeDoc, shopName]);
+  }, [transfers, variants, applyLocalMovement, writeDoc, shopName, user]);
 
   const receiveTransfer = useCallback((id: string) => {
     const trf = transfers.find((x) => x.id === id);
@@ -749,7 +825,63 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    // --- Apply: set balance to physical (actual) values absolutely ---
+    // --- Apply atomically (Phase 5) ---
+    // Build one line per changed variant. qtyChanged is the delta needed to reach
+    // the physically-counted absolute value (newQty). applyAtomicBatch applies
+    // balance + audit + count-status flip in ONE transaction, guarded by
+    // expectStatus 'submitted' so a duplicate approval is rejected.
+    const batchLines: MovementLineSpec[] = [];
+    for (const line of c.lines) {
+      const variant = variants.find((v) => v.id === line.variantId);
+      if (!variant) continue;
+      const bal = balances.find((b) => b.variantId === line.variantId && b.ownerShopId === c.shopId);
+      const oldQty = Math.round((bal?.quantity ?? 0) * 100) / 100;
+      const oldPcs = bal?.rollCount ?? 0;
+      const newQty = Math.max(0, Math.round((line.actualQuantity ?? 0) * 100) / 100);
+      const newPcs = Math.max(0, line.actualRolls ?? 0);
+      const qtyDelta = Math.round((newQty - oldQty) * 100) / 100;
+      const pcsDelta = newPcs - oldPcs;
+      if (qtyDelta === 0 && pcsDelta === 0) continue;
+      batchLines.push({
+        variant, ownerShopId: c.shopId, qtyChanged: qtyDelta, unit: line.unit,
+        rollDelta: variant.productType === 'general' ? undefined : pcsDelta,
+        remarks: JSON.stringify({
+          countNo: c.countNo, variantId: variant.id, barcode: variant.barcode ?? '',
+          oldPcs, newPcs, pcsDelta, oldQty, newQty, qtyDelta,
+          reason: line.reason ?? '', approvedBy: user.uid, approvedAt: ts,
+        }),
+      });
+    }
+
+    if (LIVE) {
+      try {
+        await applyAtomicBatch({
+          lines: batchLines, action: 'STOCK_COUNT_CORRECTION', user, refId: c.countNo,
+          canOverride: true, // count approval sets absolute physical values (can go to 0, never negative by construction)
+          statusDoc: { collection: COL.counts, id, expectStatus: 'submitted', newFields: { status: 'approved', approvedAt: ts, approvedBy: user.uid } },
+        });
+      } catch (e) {
+        if (e instanceof DuplicateOperationError) return { ok: false, error: e.message };
+        return { ok: false, error: (e as Error).message };
+      }
+      // Sync local state + variant aggregates (display metadata only).
+      setStockCounts((prev) => prev.map((x) => (x.id === id ? { ...c, status: 'approved', approvedAt: ts, approvedBy: user.uid } : x)));
+      for (const line of c.lines) {
+        const variant = variants.find((v) => v.id === line.variantId);
+        if (variant && variant.productType !== 'general') {
+          const newQty = Math.max(0, Math.round((line.actualQuantity ?? 0) * 100) / 100);
+          const newPcs = Math.max(0, line.actualRolls ?? 0);
+          const safe = Object.fromEntries(Object.entries({
+            rollQty: newPcs, totalQty: newQty,
+            totalValue: Math.round(newQty * (variant.cost ?? 0) * 100) / 100,
+          }).filter(([, v]) => v !== undefined));
+          fsPatch(COL.variants, variant.id, safe as Partial<Variant>);
+        }
+      }
+      return { ok: true };
+    }
+
+    // Demo mode: sequential apply (no real transactions).
     for (const line of c.lines) {
       const variant = variants.find((v) => v.id === line.variantId);
       if (!variant) continue;
@@ -787,8 +919,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action: 'STOCK_COUNT_CORRECTION',
         productId: variant.productId, variantId: variant.id, ownerShopId: c.shopId,
         qtyBefore: oldQty, qtyChanged: qtyDelta, qtyAfter: newQty,
-        // Structured fields stored in refId + remarks (AuditLog doesn't have dedicated fields,
-        // so we encode them as a JSON string in a custom field via remarks + refId).
         refId: c.countNo,
         remarks: JSON.stringify({
           countNo:    c.countNo,
@@ -802,19 +932,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }),
       };
 
-      if (LIVE && db) {
-        const batch = writeBatch(db);
-        batch.set(doc(db, COL.balances, bId), deepSanitize(newBal as unknown as Record<string, unknown>));
-        batch.set(doc(db, COL.audit,    auditEntry.id), deepSanitize(auditEntry as unknown as Record<string, unknown>));
-        await batch.commit();
-      } else {
-        setBalances((prev) => {
-          const map = new Map(prev.map((b) => [b.id, b]));
-          map.set(bId, newBal);
-          return [...map.values()];
-        });
-        setAudit((prev) => [auditEntry, ...prev]);
-      }
+      setBalances((prev) => {
+        const map = new Map(prev.map((b) => [b.id, b]));
+        map.set(bId, newBal);
+        return [...map.values()];
+      });
+      setAudit((prev) => [auditEntry, ...prev]);
 
       // Keep variant metadata in sync.
       if (variant.productType !== 'general') {
@@ -823,10 +946,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           totalQty:   newQty,
           totalValue: Math.round(newQty * (variant.cost ?? 0) * 100) / 100,
         };
-        if (LIVE) {
-          const safe = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
-          fsPatch(COL.variants, variant.id, safe as Partial<Variant>);
-        } else setVariants((prev) => prev.map((v) => (v.id === variant.id ? { ...v, ...patch } : v)));
+        setVariants((prev) => prev.map((v) => (v.id === variant.id ? { ...v, ...patch } : v)));
       }
     }
 
@@ -886,21 +1006,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (r.status !== 'pending') return { ok: false, error: 'Only pending reports can be approved' };
     if (!can(user?.role, 'approve_adjustment')) return { ok: false, error: 'Not authorized' };
     if (!user) return { ok: false, error: 'Not signed in' };
-    // Now reduce stock.
     const variant = variants.find((v) => v.id === r.variantId);
     if (!variant) return { ok: false, error: 'Variant not found' };
+
+    const canOverride = can(user.role, 'override_negative') && settings.allowNegativeOverride;
+    const approvedFields = { status: 'approved', approvedBy: user.uid, approvedAt: Date.now() };
+
+    if (LIVE) {
+      // Atomic: balance + audit + report status flip in ONE transaction.
+      // The status guard (expectStatus 'pending') makes this idempotent — a
+      // duplicate approve click throws DuplicateOperationError, nothing deducts.
+      try {
+        await applyAtomicBatch({
+          action: 'DAMAGE', user, refId: id, canOverride,
+          lines: [{
+            variant, ownerShopId: r.shopId, qtyChanged: -r.reportedQty, unit: r.uom,
+            rollDelta: variant.productType === 'general' ? undefined : -r.reportedPcs,
+            remarks: `Damage write-off approved: ${r.reason}${r.notes ? ' — ' + r.notes : ''}`,
+          }],
+          statusDoc: { collection: COL.damageReports, id, expectStatus: 'pending', newFields: approvedFields },
+        });
+        return { ok: true };
+      } catch (e) {
+        if (e instanceof DuplicateOperationError) return { ok: false, error: e.message };
+        if (e instanceof NegativeStockError) return { ok: false, error: e.message };
+        return { ok: false, error: (e as Error).message };
+      }
+    }
+
+    // Demo mode: sequential (no real transactions available).
     const res = await applyLocalMovement({
       variant, ownerShopId: r.shopId, qtyChanged: -r.reportedQty, unit: r.uom,
       action: 'DAMAGE', rollDelta: variant.productType === 'general' ? undefined : -r.reportedPcs,
-      remarks: `Damage write-off approved: ${r.reason}${r.notes ? ' — ' + r.notes : ''}`,
-      refId: id,
+      remarks: `Damage write-off approved: ${r.reason}${r.notes ? ' — ' + r.notes : ''}`, refId: id,
     });
     if (!res.ok) return { ok: false, error: res.error };
-    const approved: DamageReport = { ...r, status: 'approved', approvedBy: user.uid, approvedAt: Date.now() };
-    writeDoc(COL.damageReports, id, deepSanitize(approved as unknown as Record<string, unknown>),
-      () => setDamageReports((prev) => prev.map((x) => (x.id === id ? approved : x))));
+    const approved: DamageReport = { ...r, ...approvedFields } as DamageReport;
+    setDamageReports((prev) => prev.map((x) => (x.id === id ? approved : x)));
     return { ok: true };
-  }, [damageReports, variants, user, applyLocalMovement, writeDoc]);
+  }, [damageReports, variants, user, settings.allowNegativeOverride, applyLocalMovement]);
 
   const rejectDamageReport = useCallback((id: string, note: string) => {
     const r = damageReports.find((x) => x.id === id);

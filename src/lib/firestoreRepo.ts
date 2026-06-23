@@ -77,8 +77,14 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
   return deepSanitize(obj);
 }
 
-// ---- One-time seed. Idempotent: only writes if `users` is empty. ----
+// ---- Dev-only seed. Idempotent: only writes if `shops` is empty. ----
+// PRODUCTION SAFETY: this function refuses to run in a production build, even if
+// called. Demo fixtures must never reach a live customer database automatically.
 export async function seedIfEmpty(): Promise<boolean> {
+  if (!import.meta.env.DEV) {
+    console.warn('[StockDesk] seedIfEmpty blocked: not a development build');
+    return false;
+  }
   const fdb = reqDb();
   // Gate on SHOPS, not users — real user profiles are created out-of-band by
   // scripts/seedUsers.mjs and must never be overwritten by demo seeding.

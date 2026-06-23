@@ -169,3 +169,105 @@ export async function applyOwnershipTransfer(args: {
     refId, locationId: toLocationId, canOverride: true, rollDelta: rolls,
   });
 }
+
+// ── Atomic line spec for multi-line / multi-balance operations ────────────────
+export interface MovementLineSpec {
+  variant: Variant;
+  ownerShopId: string;
+  qtyChanged: number;
+  unit: string;
+  rollDelta?: number;
+  remarks?: string;
+}
+
+/**
+ * Atomically apply many balance changes + their audit logs in ONE transaction.
+ * Used by transfers (all lines succeed or none) and ownership moves.
+ * Also optionally flips a document's status in the same transaction (used by
+ * transfer send / damage approval / count approval) so stock and status can
+ * never diverge.
+ *
+ * Idempotency + legal-transition guard:
+ *   If `statusDoc` is provided, the transaction first re-reads that document and
+ *   verifies it still has `expectStatus`. If not (already processed, or changed),
+ *   it throws DuplicateOperationError and nothing is written. This prevents
+ *   double-deduction from a duplicate approve/send click.
+ */
+export class DuplicateOperationError extends Error {
+  constructor(msg: string) { super(msg); this.name = 'DuplicateOperationError'; }
+}
+
+export async function applyAtomicBatch(args: {
+  lines: MovementLineSpec[];
+  action: MovementAction;
+  user: AppUser;
+  refId?: string;
+  canOverride: boolean;
+  statusDoc?: { collection: string; id: string; expectStatus: string; newFields: Record<string, unknown> };
+}): Promise<void> {
+  const { lines, action, user, refId, canOverride, statusDoc } = args;
+  if (!db) throw new Error('Firebase not configured — applyAtomicBatch requires live mode');
+  const fdb = db;
+
+  await runTransaction(fdb, async (tx) => {
+    // 1. If guarding a status doc, re-read and verify legal transition FIRST.
+    let statusRef;
+    if (statusDoc) {
+      statusRef = doc(fdb, statusDoc.collection, statusDoc.id);
+      const snap = await tx.get(statusRef);
+      if (!snap.exists()) throw new DuplicateOperationError('Record no longer exists');
+      const cur = snap.data() as Record<string, unknown>;
+      if (cur.status !== statusDoc.expectStatus) {
+        throw new DuplicateOperationError(`Already processed (status is "${cur.status}", expected "${statusDoc.expectStatus}")`);
+      }
+    }
+
+    // 2. Read all balances first (Firestore requires all reads before writes).
+    const reads = await Promise.all(lines.map((l) => {
+      const bId = balanceId(l.variant.id, l.ownerShopId);
+      return tx.get(doc(fdb, COL.balances, bId)).then((snap) => ({ l, bId, snap }));
+    }));
+
+    // 3. Validate negative-stock rule across all lines before writing anything.
+    for (const { l, snap } of reads) {
+      const before = snap.exists() ? (snap.data() as Balance).quantity : 0;
+      const after = before + l.qtyChanged;
+      if (after < 0 && !canOverride) {
+        throw new NegativeStockError(before, Math.abs(l.qtyChanged));
+      }
+    }
+
+    // 4. Write all balances + audit logs.
+    for (const { l, bId, snap } of reads) {
+      const before = snap.exists() ? (snap.data() as Balance).quantity : 0;
+      const beforeRolls = snap.exists() ? ((snap.data() as Balance).rollCount ?? 0) : 0;
+      const after = before + l.qtyChanged;
+      const newRolls = Math.max(0, beforeRolls + (l.rollDelta ?? 0));
+
+      const balanceData: Record<string, unknown> = {
+        id: bId, variantId: l.variant.id, productId: l.variant.productId,
+        ownerShopId: l.ownerShopId, quantity: after, unit: l.unit,
+        rollCount: l.variant.productType === 'general' ? undefined : newRolls,
+        locationId: snap.exists() ? (snap.data() as Balance).locationId : undefined,
+        updatedAt: Date.now(),
+      };
+      Object.keys(balanceData).forEach((k) => balanceData[k] === undefined && delete balanceData[k]);
+      tx.set(doc(fdb, COL.balances, bId), balanceData);
+
+      const auditRef = doc(collection(fdb, COL.audit));
+      tx.set(auditRef, {
+        timestamp: Date.now(), serverTime: serverTimestamp(),
+        userId: user.uid, userName: user.name, action,
+        productId: l.variant.productId, variantId: l.variant.id, ownerShopId: l.ownerShopId,
+        qtyBefore: before, qtyChanged: l.qtyChanged, qtyAfter: after,
+        ...(l.remarks ? { remarks: l.remarks } : {}),
+        ...(refId ? { refId } : {}),
+      });
+    }
+
+    // 5. Flip the status doc in the SAME transaction (atomic with stock).
+    if (statusDoc && statusRef) {
+      tx.update(statusRef, statusDoc.newFields);
+    }
+  });
+}
