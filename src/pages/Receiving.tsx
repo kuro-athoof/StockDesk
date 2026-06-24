@@ -714,7 +714,7 @@ function ReceivingEditor({ receiving, onClose }: { receiving: Receiving | null; 
             </label>
             <button className="btn-ghost text-sm" onClick={sampleCsv}>Sample CSV</button>
             <div className="ml-auto flex gap-2">
-              <button className="btn-ghost text-sm" onClick={() => exportReceivingCsv(receivingNo, lines, products, variants)}>Export</button>
+              <button className="btn-ghost text-sm" onClick={() => exportReceivingCsv(receivingNo, lines, products, variants, can(user?.role, 'view_costs'))}>Export</button>
               <button className="btn-ghost text-sm" onClick={doSaveDraft}>Save draft</button>
               {can(user?.role, 'receive_stock') && (
                 <button className="btn-primary text-sm" onClick={doPost}>Post receiving</button>
@@ -746,13 +746,18 @@ function downloadText(name: string, text: string) {
   a.href = url; a.download = name; a.click();
   URL.revokeObjectURL(url);
 }
-function exportReceivingCsv(no: string, lines: ReceivingLine[], products: { id: string; name: string }[], variants: { id: string; label: string }[]) {
-  const head = 'barcode,product,variant,uom,pcs,totalQty,fob,fobUnit,fobUom,cost,totalCost,remarks';
-  const rows = lines.map((l) => [
-    l.barcode ?? '', products.find((p) => p.id === l.productId)?.name ?? '',
-    variants.find((v) => v.id === l.variantId)?.label ?? '', l.stockUom,
-    l.rollQty ?? '', l.quantity, l.fobValue ?? '', l.fobUomUnit ?? 1, l.fobUnit ?? '',
-    l.cost ?? '', l.totalCost ?? '', l.remarks ?? '',
-  ].join(','));
+function exportReceivingCsv(no: string, lines: ReceivingLine[], products: { id: string; name: string }[], variants: { id: string; label: string }[], showCosts: boolean) {
+  const head = showCosts
+    ? 'barcode,product,variant,uom,pcs,totalQty,fob,fobUnit,fobUom,cost,totalCost,remarks'
+    : 'barcode,product,variant,uom,pcs,totalQty,remarks';
+  const rows = lines.map((l) => {
+    const base = [
+      l.barcode ?? '', products.find((p) => p.id === l.productId)?.name ?? '',
+      variants.find((v) => v.id === l.variantId)?.label ?? '', l.stockUom,
+      l.rollQty ?? '', l.quantity,
+    ];
+    const costCols = [l.fobValue ?? '', l.fobUomUnit ?? 1, l.fobUnit ?? '', l.cost ?? '', l.totalCost ?? ''];
+    return (showCosts ? [...base, ...costCols, l.remarks ?? ''] : [...base, l.remarks ?? '']).join(',');
+  });
   downloadText(`${no}.csv`, [head, ...rows].join('\n'));
 }

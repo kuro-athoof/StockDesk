@@ -130,7 +130,7 @@ export function WarehouseMode() {
         o.connect(g); g.connect(ctx.destination); o.frequency.value = 880;
         g.gain.setValueAtTime(0.3, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
         o.start(); o.stop(ctx.currentTime + 0.2);
-      } catch {}
+      } catch { /* AudioContext unavailable — ignore */ }
     }
     setTimeout(() => setToast(null), 2800);
   };
@@ -193,7 +193,7 @@ export function WarehouseMode() {
   const selectItem = (v: Variant) => {
     setFound(v); setModal(null); setCode(''); setShowResults(false); setActiveTab('scan');
     setRecentScans((prev) => [{ variantId: v.id, ts: Date.now() }, ...prev.filter((r) => r.variantId !== v.id)].slice(0, 10));
-    scanRef.current?.focus();
+    refocus();
   };
 
   // Enter key: exact barcode → load; single result → load; multiple → keep open; none → not found.
@@ -211,7 +211,7 @@ export function WarehouseMode() {
     // 4. none
     showToast(`Item not found: "${q}"`, false);
     setCode('');
-    scanRef.current?.focus();
+    refocus();
   };
 
   // ─── Fix 3: Quick Receive — block if no cost ─────────────────────────────
@@ -486,6 +486,8 @@ export function WarehouseMode() {
       {modal === 'more' && found && (
         <Modal title="More Actions" onClose={closeModal}>
           <div className="space-y-2">
+            {/* eslint-disable-next-line react-hooks/refs -- closeModal reads scanRef only inside a
+                setTimeout callback (via refocus), not synchronously during render. */}
             {[
               { label: 'Return to Supplier', icon: '↩', action: () => showToast('Coming soon', false) },
               { label: 'Move Location',      icon: '📦', action: () => showToast('Coming soon', false) },
@@ -539,6 +541,7 @@ export function WarehouseMode() {
                   const b = scopedBalances.find((x) => x.variantId === v.id && x.ownerShopId === shopId);
                   const t = b ? stockTone(b.quantity, LOW) : 'red';
                   return (
+                    // eslint-disable-next-line react-hooks/refs
                     <button key={v.id} onClick={() => selectItem(v)}
                       className={`flex w-full items-center gap-3 border-b border-gray-50 px-4 py-3 text-left last:border-0 hover:bg-teal-50 ${i === 0 ? 'bg-gray-50' : ''}`}>
                       <span className={`h-3 w-3 shrink-0 rounded-full ${TONE_DOT[t]}`} />
@@ -614,7 +617,7 @@ export function WarehouseMode() {
                           <span className="font-mono font-semibold text-gray-600">{found.barcode}</span>
                         </div>
                       </div>
-                      <button className="ml-2 rounded-full p-2 text-gray-400 hover:bg-white/60" onClick={() => { setFound(null); setCode(''); scanRef.current?.focus(); }}>✕</button>
+                      <button className="ml-2 rounded-full p-2 text-gray-400 hover:bg-white/60" onClick={() => { setFound(null); setCode(''); refocus(); }}>✕</button>
                     </div>
 
                     {/* Stock cells — Fix 2: show PCS/Rolls label based on type */}

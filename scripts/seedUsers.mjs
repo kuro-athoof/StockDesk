@@ -53,7 +53,6 @@ async function ensureUser(u) {
 }
 
 for (const u of USERS) {
-  // eslint-disable-next-line no-await-in-loop
   await ensureUser(u);
 }
 console.log('\nDone. Sign in with these emails. Change the default passwords.');

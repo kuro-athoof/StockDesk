@@ -1,5 +1,5 @@
 import {
-  createContext, useContext, useState, useMemo, useCallback, useEffect, type ReactNode,
+  createContext, useContext, useState, useMemo, useCallback, useEffect, useRef, type ReactNode,
 } from 'react';
 import type {
   AppUser, Shop, Product, Variant, Balance, Unit, StockLocation,
@@ -17,7 +17,7 @@ import { suggestVariantBarcode, isBarcodeTaken } from '../lib/dataQuality';
 import { firebaseConfigured, auth, db, COL } from '../lib/firebase';
 import { repo, subscribe, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize } from '../lib/firestoreRepo';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, runTransaction } from 'firebase/firestore';
 
 interface MoveArgs {
   variant: Variant;
@@ -158,6 +158,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [costHistory, setCostHistory] = useState<CostHistory[]>([]);
   const [damageReports, setDamageReports] = useState<DamageReport[]>([]);
   const [ready, setReady] = useState<boolean>(!LIVE);
+  // P0.1/P0.2: in-flight operation locks. Prevents a duplicate click from
+  // launching a second post/send before the first finishes (client-side guard;
+  // the Firestore status guard is the authoritative second layer).
+  const inFlight = useRef<Set<string>>(new Set());
 
   // Live mode: seed once, then attach realtime subscriptions.
   // Live mode: track Firebase Auth and resolve the Firestore profile (role).
@@ -206,16 +210,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         repo.subscribeUnits(setUnits),
         repo.subscribeLocations(setLocations),
         repo.subscribeSuppliers(setSuppliers),
-        repo.subscribeRates(setRates),
         repo.subscribeAudit(setAudit),
         repo.subscribeSettings((s) => s && setSettings(s)),
         repo.subscribeCategories((c) => c && setCategories(c.values)),
         repo.subscribeReceivings(setReceivings),
         repo.subscribeTransfers(setTransfers),
         repo.subscribeCounts(setStockCounts),
-        repo.subscribeCostHistory(setCostHistory),
         subscribe<DamageReport>(COL.damageReports, setDamageReports),
       ];
+      // P0.4 parity: cost_history and country_rates are denied to warehouse_staff
+      // by Firestore rules. Only subscribe when the user holds view_costs, so the
+      // warehouse role never triggers permission-denied console errors.
+      if (can(user.role, 'view_costs')) {
+        unsubs.push(repo.subscribeRates(setRates));
+        unsubs.push(repo.subscribeCostHistory(setCostHistory));
+      }
       setReady(true);
     })();
     return () => { cancelled = true; unsubs.forEach((u) => u()); };
@@ -379,10 +388,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } as Receiving;
     }
     if (!rcv) return { ok: false, error: 'Receiving not found' };
-    if (rcv.status === 'posted') return { ok: false, error: 'Already posted' };
+    // P0.2: idempotency guards against duplicate posting.
+    //  (a) status must still be draft, and postedAt must be absent;
+    //  (b) an in-flight lock blocks a second click before the first resolves.
+    if (rcv.status === 'posted' || rcv.postedAt != null) return { ok: false, error: 'Already posted' };
+    if (rcv.status !== 'draft') return { ok: false, error: 'Only draft receivings can be posted' };
     if (rcv.lines.length === 0) return { ok: false, error: 'No line items to post' };
     if (!user) return { ok: false, error: 'Not signed in' };
+    const lockKey = `rcv:${rcv.id}`;
+    if (inFlight.current.has(lockKey)) return { ok: false, error: 'Posting already in progress' };
+    inFlight.current.add(lockKey);
 
+    try {
     // Country rate is header-level — derive it here, never from stale line.exchangeRate.
     const headerRate = rates.find((r) => r.country.toLowerCase() === (rcv.country ?? '').toLowerCase())?.finalUsedRate ?? 0;
     if (headerRate <= 0) return { ok: false, error: 'Country rate is missing or invalid. Set a rate in Administration → Country Rates.' };
@@ -489,16 +506,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (LIVE && db) {
       try {
         const database = db;
-        const batch = writeBatch(database);
-        // deepSanitize every payload — removes undefined recursively (including inside lines[]).
-        newVariants.forEach((v) => batch.set(doc(database, COL.variants, v.id), deepSanitize(v as unknown as Record<string, unknown>)));
-        variantPatches.forEach((p, vid) => batch.update(doc(database, COL.variants, vid), deepSanitize(p as Record<string, unknown>)));
-        balanceWrites.forEach((b) => batch.set(doc(database, COL.balances, b.id), deepSanitize(b as unknown as Record<string, unknown>)));
-        costWrites.forEach((c) => batch.set(doc(database, COL.costHistory, c.id), deepSanitize(c as unknown as Record<string, unknown>)));
-        auditWrites.forEach((a) => batch.set(doc(database, COL.audit, a.id), deepSanitize(a as unknown as Record<string, unknown>)));
-        batch.set(doc(database, COL.receivings, rcv.id), deepSanitize(posted as unknown as Record<string, unknown>));
-        await batch.commit();
+        // P0.2: re-read the receiving inside a transaction and abort if it's no
+        // longer a draft (i.e. another click already posted it). This makes the
+        // post idempotent even across tabs/devices. The bulk writes are then
+        // applied in the same transaction so stock + status commit together.
+        await runTransaction(database, async (tx) => {
+          const rcvRef = doc(database, COL.receivings, rcv.id);
+          const snap = await tx.get(rcvRef);
+          if (snap.exists()) {
+            const cur = snap.data() as Receiving;
+            if (cur.status === 'posted' || cur.postedAt != null) {
+              throw new DuplicateOperationError('Receiving already posted');
+            }
+          }
+          newVariants.forEach((v) => tx.set(doc(database, COL.variants, v.id), deepSanitize(v as unknown as Record<string, unknown>)));
+          variantPatches.forEach((p, vid) => tx.update(doc(database, COL.variants, vid), deepSanitize(p as Record<string, unknown>)));
+          balanceWrites.forEach((b) => tx.set(doc(database, COL.balances, b.id), deepSanitize(b as unknown as Record<string, unknown>)));
+          costWrites.forEach((c) => tx.set(doc(database, COL.costHistory, c.id), deepSanitize(c as unknown as Record<string, unknown>)));
+          auditWrites.forEach((a) => tx.set(doc(database, COL.audit, a.id), deepSanitize(a as unknown as Record<string, unknown>)));
+          tx.set(rcvRef, deepSanitize(posted as unknown as Record<string, unknown>));
+        });
       } catch (e) {
+        if (e instanceof DuplicateOperationError) return { ok: false, error: e.message };
         return { ok: false, error: `Atomic post failed: ${(e as Error).message}` };
       }
     } else {
@@ -520,6 +549,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     }
     return { ok: true };
+    } finally {
+      inFlight.current.delete(lockKey);
+    }
   }, [receivings, variants, products, balances, rates, allBarcodes, user, balanceOf]);
 
   const cancelReceiving = useCallback((id: string) => {
@@ -576,6 +608,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (trf.type === 'ownership' && !trf.approvedBy) {
       return { ok: false, error: 'Ownership transfer requires manager approval' };
     }
+    // P0.1: in-flight lock blocks a duplicate send click before the first resolves.
+    const sendLockKey = `trf:${trf.id}`;
+    if (inFlight.current.has(sendLockKey)) return { ok: false, error: 'Send already in progress' };
+    inFlight.current.add(sendLockKey);
+    try {
 
     // Phase 4 (Production Safety): apply ALL lines atomically. In LIVE mode the
     // balance changes, audit logs, and the transfer status flip happen in ONE
@@ -610,9 +647,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       const canOverride = !!user && can(user.role, 'override_negative');
       try {
-        // Ensure the draft exists in Firestore so the status guard can read it.
-        await new Promise<void>((resolve) => writeDoc(COL.transfers, trf!.id,
-          deepSanitize(trf as unknown as Record<string, unknown>), () => resolve()));
+        // Ensure the draft exists in Firestore so the in-transaction status guard
+        // can read it. upsert() is async and resolves when the write completes —
+        // the previous writeDoc()-wrapped Promise never resolved in live mode and
+        // caused sendTransfer to hang (P0.1).
+        await upsert(COL.transfers, trf.id, deepSanitize(trf as unknown as Record<string, unknown>));
         await applyAtomicBatch({
           lines, action: trf.type === 'ownership' ? 'OWNERSHIP_TRANSFER' : 'TRANSFER_OUT',
           user: user!, refId: trf.transferNo, canOverride,
@@ -718,7 +757,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     });
     return { ok: true };
-  }, [transfers, variants, applyLocalMovement, writeDoc, shopName, user]);
+    } finally {
+      inFlight.current.delete(sendLockKey);
+    }
+  }, [transfers, variants, applyLocalMovement, writeDoc, shopName, user, balanceOf]);
 
   const receiveTransfer = useCallback((id: string) => {
     const trf = transfers.find((x) => x.id === id);

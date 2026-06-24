@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { useStore } from '../context/StoreContext';
 import { PageHeader, Badge } from '../components/ui';
 import { can } from '../lib/permissions';
@@ -49,24 +49,24 @@ export function Reports() {
   };
 
   // ── Helpers: does a balance/audit row pass the applied filters? ──────────────
-  const matchesProductFilters = (productId: string, ownerShopId?: string) => {
+  const matchesProductFilters = useCallback((productId: string, ownerShopId?: string) => {
     const p = products.find((x) => x.id === productId);
     if (applied.owner && ownerShopId && ownerShopId !== applied.owner) return false;
     if (applied.supplier && p?.supplierId !== applied.supplier) return false;
     if (applied.product && productId !== applied.product) return false;
     if (applied.category && p?.category !== applied.category) return false;
     return true;
-  };
-  const inDateRange = (ts: number) => {
+  }, [products, applied]);
+  const inDateRange = useCallback((ts: number) => {
     if (applied.dateFrom && ts < new Date(applied.dateFrom).getTime()) return false;
     if (applied.dateTo && ts > new Date(applied.dateTo).getTime() + 86400_000) return false;
     return true;
-  };
+  }, [applied]);
 
   // Balances passing filters (owner/supplier/product/category) — date doesn't apply to live balances.
   const filteredBalances = useMemo(
     () => scopedBalances.filter((b) => matchesProductFilters(b.productId, b.ownerShopId)),
-    [scopedBalances, applied, products],
+    [scopedBalances, matchesProductFilters],
   );
 
   // ── Executive KPIs ───────────────────────────────────────────────────────────

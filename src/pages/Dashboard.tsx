@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { PageHeader, Badge } from '../components/ui';
+import { can } from '../lib/permissions';
 
 const fmt = (n: number) => `MVR ${Math.round(n).toLocaleString()}`;
 const fmtQty = (n: number, u?: string) => `${Math.round(n * 100) / 100}${u ? ' ' + u : ''}`;
@@ -15,6 +16,8 @@ export function Dashboard() {
     user, scopedBalances, visibleShopIds, shops, products, variants,
     audit, receivings, transfers, stockCounts, productName,
   } = useStore();
+
+  const showCosts = can(user?.role, 'view_costs'); // P0.5: gate value displays
 
   // Cost map: variantId → latest landed cost from receiving
   const costOf = useMemo(() => {
@@ -132,10 +135,10 @@ export function Dashboard() {
 
       {/* Row 1: 4 stat cards */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Card 1: Godown Value */}
+        {/* Card 1: Godown Value (value hidden without view_costs) */}
         <div className="card p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-ink-400">Godown Value</div>
-          <div className="mt-1 text-2xl font-bold text-teal-600">{fmt(godownValue.totalValue)}</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-ink-400">{showCosts ? 'Godown Value' : 'Godown Stock'}</div>
+          <div className="mt-1 text-2xl font-bold text-teal-600">{showCosts ? fmt(godownValue.totalValue) : fmtQty(godownValue.totalQty)}</div>
           <div className="mt-2 flex gap-3 text-xs text-ink-400">
             <span><b className="text-ink-700">{godownValue.products}</b> products</span>
             <span><b className="text-ink-700">{godownValue.variants}</b> variants</span>
@@ -148,7 +151,7 @@ export function Dashboard() {
           <div className="mt-1 text-2xl font-bold text-ink-900">{todayReceiving.count}</div>
           <div className="mt-2 flex gap-3 text-xs text-ink-400">
             <span><b className="text-ink-700">{todayReceiving.totalQty}</b> qty in</span>
-            <span><b className="text-ink-700">{fmt(todayReceiving.totalValue)}</b></span>
+            {showCosts && <span><b className="text-ink-700">{fmt(todayReceiving.totalValue)}</b></span>}
           </div>
         </div>
 
@@ -201,7 +204,8 @@ export function Dashboard() {
           </div>
         </div>
 
-        {/* Card 5: Largest Stock Value */}
+        {/* Card 5: Largest Stock Value — cost-based, hidden without view_costs */}
+        {showCosts && (
         <div className="card p-4 lg:col-span-1">
           <h3 className="mb-3 text-sm font-bold text-ink-900">Largest Stock Value <span className="text-ink-400 font-normal">(top 10)</span></h3>
           <div className="overflow-x-auto">
@@ -224,6 +228,7 @@ export function Dashboard() {
           </table>
           </div>
         </div>
+        )}
 
         {/* Card 8: Quick Summary */}
         <div className="card p-4 lg:col-span-1">
@@ -232,7 +237,7 @@ export function Dashboard() {
             <SummaryRow label="Products" value={String(summary.products)} />
             <SummaryRow label="Variants" value={String(summary.variants)} />
             <SummaryRow label="Total Qty in Godown" value={fmtQty(summary.totalQty)} />
-            <SummaryRow label="Total Godown Value" value={fmt(summary.totalValue)} accent />
+            {showCosts && <SummaryRow label="Total Godown Value" value={fmt(summary.totalValue)} accent />}
           </div>
         </div>
       </div>
@@ -267,7 +272,7 @@ export function Dashboard() {
         {/* Top Moving / Slow Moving side-by-side mini cards */}
         <div className="flex flex-col gap-4">
           <TopMoving audit={audit} visibleShopIds={visibleShopIds} variants={variants} productName={productName} />
-          <SlowMoving scopedBalances={scopedBalances} audit={audit} visibleShopIds={visibleShopIds} variants={variants} productName={productName} />
+          <SlowMoving scopedBalances={scopedBalances} audit={audit} variants={variants} productName={productName} />
         </div>
       </div>
     </div>
@@ -281,8 +286,9 @@ function TopMoving({ audit, visibleShopIds, variants, productName }: {
   variants: ReturnType<typeof useStore>['variants'];
   productName: (id: string) => string;
 }) {
+  const [now] = useState(() => Date.now());
   const rows = useMemo(() => {
-    const cutoff = Date.now() - 30 * 86400_000;
+    const cutoff = now - 30 * 86400_000;
     const by: Record<string, number> = {};
     audit.filter((a) => a.timestamp >= cutoff && visibleShopIds.includes(a.ownerShopId) && a.action === 'TRANSFER_OUT')
          .forEach((a) => { by[a.variantId] = (by[a.variantId] ?? 0) + Math.abs(a.qtyChanged); });
@@ -290,7 +296,7 @@ function TopMoving({ audit, visibleShopIds, variants, productName }: {
       const v = variants.find((x) => x.id === vid);
       return { label: v ? `${productName(v.productId)} · ${v.label}` : vid, qty, uom: v?.uom ?? '' };
     }).sort((a, b) => b.qty - a.qty).slice(0, 5);
-  }, [audit, visibleShopIds, variants, productName]);
+  }, [audit, visibleShopIds, variants, productName, now]);
 
   return (
     <div className="card p-4">
@@ -305,15 +311,15 @@ function TopMoving({ audit, visibleShopIds, variants, productName }: {
   );
 }
 
-function SlowMoving({ scopedBalances, audit, visibleShopIds, variants, productName }: {
+function SlowMoving({ scopedBalances, audit, variants, productName }: {
   scopedBalances: ReturnType<typeof useStore>['scopedBalances'];
   audit: ReturnType<typeof useStore>['audit'];
-  visibleShopIds: string[];
   variants: ReturnType<typeof useStore>['variants'];
   productName: (id: string) => string;
 }) {
+  const [now] = useState(() => Date.now());
   const rows = useMemo(() => {
-    const cutoff = Date.now() - 30 * 86400_000;
+    const cutoff = now - 30 * 86400_000;
     const movedSet = new Set(
       audit.filter((a) => a.timestamp >= cutoff && a.action === 'TRANSFER_OUT').map((a) => a.variantId),
     );
@@ -323,11 +329,11 @@ function SlowMoving({ scopedBalances, audit, visibleShopIds, variants, productNa
         const v = variants.find((x) => x.id === b.variantId);
         const lastMove = audit.filter((a) => a.variantId === b.variantId && a.action === 'TRANSFER_OUT')
           .sort((a, b) => b.timestamp - a.timestamp)[0];
-        const days = lastMove ? Math.floor((Date.now() - lastMove.timestamp) / 86400_000) : null;
+        const days = lastMove ? Math.floor((now - lastMove.timestamp) / 86400_000) : null;
         return { label: v ? `${productName(b.productId)} · ${v.label}` : b.variantId, days };
       })
       .slice(0, 5);
-  }, [scopedBalances, audit, visibleShopIds, variants, productName]);
+  }, [scopedBalances, audit, variants, productName, now]);
 
   return (
     <div className="card p-4">

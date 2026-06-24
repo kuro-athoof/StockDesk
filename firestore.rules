@@ -50,6 +50,11 @@ service cloud.firestore {
       return m[field] is string && m[field].size() > 0;
     }
 
+    // A field is absent OR a non-negative number (for optional numerics).
+    function optNonNegNumber(m, field) {
+      return !(field in m) || (m[field] is number && m[field] >= 0);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Users: self-read for profile load; admin/auditor read all; admin writes
     // ─────────────────────────────────────────────────────────────────────────
@@ -94,14 +99,17 @@ service cloud.firestore {
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
                      && canSeeShop(request.resource.data.ownerShopId)
                      && nonNegNumber(request.resource.data, 'quantity')
+                     && optNonNegNumber(request.resource.data, 'rollCount')
                      && nonEmptyString(request.resource.data, 'variantId')
                      && nonEmptyString(request.resource.data, 'ownerShopId');
       allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse())
                      && canSeeShop(resource.data.ownerShopId)
                      && canSeeShop(request.resource.data.ownerShopId)
                      && nonNegNumber(request.resource.data, 'quantity')
+                     && optNonNegNumber(request.resource.data, 'rollCount')
                      // identity of a balance row is immutable
                      && unchanged('variantId')
+                     && unchanged('ownerShopId')
                      && unchanged('productId');
       allow delete: if false;
     }
@@ -195,6 +203,7 @@ service cloud.firestore {
                      && canSeeShop(request.resource.data.shopId)
                      && request.resource.data.status == 'pending'
                      && nonNegNumber(request.resource.data, 'reportedQty')
+                     && optNonNegNumber(request.resource.data, 'reportedPcs')
                      && nonEmptyString(request.resource.data, 'reason')
                      && nonEmptyString(request.resource.data, 'variantId')
                      // reporter identity must be the caller
@@ -235,17 +244,19 @@ service cloud.firestore {
                      && canSeeShop(request.resource.data.shopId)
                      && unchanged('shopId')
                      && (
-                          // staff edits + submit + recount cycle (no approval)
+                          // staff edits + submit + recount cycle (no approval).
+                          // NOTE: a submitted count may NOT be returned to 'open' by
+                          // non-approvers — only an approver can reopen/reject it.
                           (
                             (resource.data.status == 'open' && request.resource.data.status in ['open', 'submitted', 'cancelled'])
                             || (resource.data.status == 'rejected' && request.resource.data.status in ['rejected', 'submitted'])
-                            || (resource.data.status == 'submitted' && request.resource.data.status in ['submitted', 'open'])
+                            || (resource.data.status == 'submitted' && request.resource.data.status == 'submitted')
                           )
-                          // approval / rejection — approvers only
+                          // approval / rejection / reopen — approvers only
                           || (
                             canApprove()
                             && resource.data.status == 'submitted'
-                            && request.resource.data.status in ['approved', 'rejected']
+                            && request.resource.data.status in ['approved', 'rejected', 'open']
                             && (request.resource.data.status != 'approved'
                                  || request.resource.data.approvedBy == request.auth.uid)
                             && (request.resource.data.status != 'rejected'

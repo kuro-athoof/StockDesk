@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../context/StoreContext';
 import { PageHeader, Badge, EmptyState } from '../components/ui';
@@ -7,12 +7,17 @@ export function BarcodeLookup() {
   const [params] = useSearchParams();
   const initial = params.get('q') ?? '';
   const [q, setQ] = useState(initial);
+  // Sync local input when the URL ?q= changes, without an effect (avoids the
+  // cascading-render lint). React's "adjust state during render" pattern.
+  const [prevInitial, setPrevInitial] = useState(initial);
+  if (initial !== prevInitial) {
+    setPrevInitial(initial);
+    setQ(initial);
+  }
   const {
     variants, scopedBalances, locations, products,
     shopName, productName, lastMovementOf, visibleShopIds,
   } = useStore();
-
-  useEffect(() => { setQ(initial); }, [initial]);
 
   const matches = useMemo(() => {
     if (!q.trim()) return [];

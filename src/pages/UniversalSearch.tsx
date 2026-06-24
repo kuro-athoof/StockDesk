@@ -1,17 +1,23 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../context/StoreContext';
 import { PageHeader, EmptyState } from '../components/ui';
+import { can } from '../lib/permissions';
 
 export function UniversalSearch() {
   const [params] = useSearchParams();
   const initial = params.get('q') ?? '';
   const [q, setQ] = useState(initial);
+  // Sync local input when ?q= changes without an effect (avoids cascading-render lint).
+  const [prevInitial, setPrevInitial] = useState(initial);
+  if (initial !== prevInitial) {
+    setPrevInitial(initial);
+    setQ(initial);
+  }
   const {
-    variants, products, suppliers, audit, productName, visibleShopIds, scopedBalances,
+    variants, products, suppliers, audit, productName, visibleShopIds, scopedBalances, user,
   } = useStore();
-
-  useEffect(() => { setQ(initial); }, [initial]);
+  const showCosts = can(user?.role, 'view_costs'); // P0.5: gate cost/value in search
 
   const matches = useMemo(() => {
     if (!q.trim()) return [];
@@ -97,14 +103,18 @@ export function UniversalSearch() {
                         <div className="text-[10px] text-ink-400">Total Qty</div>
                         <div className="font-bold text-ink-900">{balQty} <span className="text-xs font-normal text-ink-400">{v.uom}</span></div>
                       </div>
+                      {showCosts && (
                       <div className="rounded-lg bg-ink-50 p-2">
                         <div className="text-[10px] text-ink-400">Cost</div>
                         <div className="font-bold text-ink-900">{v.cost?.toFixed(2) ?? '—'}</div>
                       </div>
+                      )}
+                      {showCosts && (
                       <div className="rounded-lg bg-teal-50 p-2">
                         <div className="text-[10px] text-teal-600">Value</div>
                         <div className="font-bold text-teal-700">{Math.round(balQty * (v.cost ?? 0)).toLocaleString()}</div>
                       </div>
+                      )}
                     </>);
                   })()}
                 </div>

@@ -34,7 +34,7 @@ export function suggestVariantBarcode(
   const prefix = productPrefix(product.name);
   const num = variant.ourColorNumber ?? variant.designNumber
     ?? (variant.label.match(/\d+/)?.[0]) ?? String(fallbackIndex);
-  let base = `${prefix}-${pad3(num)}`;
+  const base = `${prefix}-${pad3(num)}`;
   if (!existingBarcodes.has(base)) return base;
   // collision — append a letter suffix until unique
   for (let i = 0; i < 26; i++) {
