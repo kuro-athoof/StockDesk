@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback } from 'react';
 import { useStore } from '../context/StoreContext';
 import { PageHeader, Badge } from '../components/ui';
 import { can } from '../lib/permissions';
+import { sanitizeRemarks } from '../lib/sanitizeRemarks';
 
 // Report tabs
 type ReportKey = 'low' | 'damaged' | 'receiving' | 'transfers' | 'by_owner' | 'color_map';
@@ -93,25 +94,21 @@ export function Reports() {
         subtitle="Operational inventory reports — sourced from stock_balances, audit_logs, and damage_reports"
         action={
           <div className="relative">
-            <button className="btn-ghost flex items-center gap-1" onClick={() => setExportOpen((o) => !o)}>
+            <button
+              className="btn-ghost flex items-center gap-1 text-ink-400 cursor-default"
+              title="Export generation is planned for V2 — not yet available"
+              onClick={() => setExportOpen((o) => !o)}>
               Export ▼
             </button>
             {exportOpen && (
               <>
                 <div className="fixed inset-0 z-30" onClick={() => setExportOpen(false)} />
-                <div className="absolute right-0 z-40 mt-1 w-56 rounded-xl border border-ink-100 bg-white p-2 shadow-xl">
-                  {(['Excel', 'PDF', 'CSV'] as const).map((fmt) => (
-                    <div key={fmt} className="rounded-lg p-1 hover:bg-ink-50">
-                      <div className="px-2 py-1 text-xs font-bold uppercase tracking-wide text-ink-400">{fmt}</div>
-                      {(['Current Report', 'Full Report', 'Summary Only'] as const).map((scope) => (
-                        <button key={scope}
-                          className="block w-full rounded px-3 py-1.5 text-left text-sm text-ink-600 hover:bg-teal-50 hover:text-teal-700"
-                          onClick={() => { alert(`Export ${fmt} · ${scope} — backend generation coming in V2`); setExportOpen(false); }}>
-                          {scope}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
+                <div className="absolute right-0 z-40 mt-1 w-64 rounded-xl border border-ink-100 bg-white p-4 shadow-xl">
+                  <p className="text-sm font-semibold text-ink-700 mb-1">Export — Coming in V2</p>
+                  <p className="text-xs text-ink-400">
+                    Excel, PDF and CSV export will be available in the next release.
+                    Current report data is visible on-screen above.
+                  </p>
                 </div>
               </>
             )}
@@ -194,7 +191,7 @@ export function Reports() {
         <AuditReport
           title="Receiving History"
           rows={audit.filter((a) => a.action === 'RECEIVE' && visibleShopIds.includes(a.ownerShopId) && matchesProductFilters(a.productId, a.ownerShopId) && inDateRange(a.timestamp)).sort((a, b) => b.timestamp - a.timestamp)}
-          variants={variants} productName={productName} shopName={shopName} positive />
+          variants={variants} productName={productName} shopName={shopName} positive showCosts={showCosts} />
       )}
 
       {/* ── TRANSFER HISTORY ── */}
@@ -371,13 +368,14 @@ function DamagedReport({ reports, variants, productName, showCosts }: {
 }
 
 // ─── RECEIVING HISTORY (audit) ────────────────────────────────────────────────
-function AuditReport({ title, rows, variants, productName, shopName, positive }: {
+function AuditReport({ title, rows, variants, productName, shopName, positive, showCosts }: {
   title: string;
   rows: ReturnType<typeof useStore>['audit'];
   variants: ReturnType<typeof useStore>['variants'];
   productName: (id: string) => string;
   shopName: (id: string) => string;
   positive?: boolean;
+  showCosts: boolean;
 }) {
   return (
     <>
@@ -408,7 +406,7 @@ function AuditReport({ title, rows, variants, productName, shopName, positive }:
                 <Td bold>{productName(a.productId)}</Td><Td>{v?.label}</Td>
                 <Td><span className="font-bold text-teal-600">+{a.qtyChanged}</span></Td>
                 <Td>—</Td><Td>{a.userName}</Td>
-                <Td><span className="text-xs text-ink-400">{a.remarks ?? '—'}</span></Td>
+                <Td><span className="text-xs text-ink-400">{sanitizeRemarks(a.remarks, showCosts)}</span></Td>
               </tr>
             );
           })}

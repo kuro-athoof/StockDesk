@@ -213,7 +213,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         repo.subscribeAudit(setAudit),
         repo.subscribeSettings((s) => s && setSettings(s)),
         repo.subscribeCategories((c) => c && setCategories(c.values)),
-        repo.subscribeReceivings(setReceivings),
         repo.subscribeTransfers(setTransfers),
         repo.subscribeCounts(setStockCounts),
         subscribe<DamageReport>(COL.damageReports, setDamageReports),
@@ -224,6 +223,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (can(user.role, 'view_costs')) {
         unsubs.push(repo.subscribeRates(setRates));
         unsubs.push(repo.subscribeCostHistory(setCostHistory));
+        // Fix 1: receivings contain FOB/cost fields and Firestore rules restrict
+        // reads to view_costs roles. Do not subscribe warehouse_staff — they have
+        // no receivings UI and the subscription would trigger permission-denied noise.
+        unsubs.push(repo.subscribeReceivings(setReceivings));
       }
       setReady(true);
     })();

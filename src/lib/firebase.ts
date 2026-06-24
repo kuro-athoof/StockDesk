@@ -59,6 +59,10 @@ let _app: FirebaseApp | null = null;
 let _auth: Auth | null = null;
 let _db: Firestore | null = null;
 let _storage: FirebaseStorage | null = null;
+// P3: Tracks a runtime Firebase init failure when config looks valid but initialisation
+// throws (wrong API key, network error, project not found, etc.).
+// If set, App.tsx renders a clear error screen instead of an infinite loading state.
+let _initError: string | null = null;
 
 if (firebaseConfigured) {
   try {
@@ -67,9 +71,12 @@ if (firebaseConfigured) {
     _db = getFirestore(_app);
     _storage = getStorage(_app);
   } catch (err) {
-    // In production, a Firebase init failure is fatal — do not fall back to demo.
-    // In development we may fall back so the UI is still inspectable.
+    // In production a Firebase init failure is fatal — surface a clear message.
+    // In development we log and leave the app in demo mode so the UI is inspectable.
+    const msg = err instanceof Error ? err.message : String(err);
     console.error('[StockDesk] Firebase init failed:', err);
+    _initError = `Firebase initialisation failed. Check that your project ID, API key and `
+      + `domain are correct and the project exists.\n\nDetail: ${msg}`;
     _app = null; _auth = null; _db = null; _storage = null;
   }
 }
@@ -78,6 +85,9 @@ export const app = _app;
 export const auth = _auth;
 export const db = _db;
 export const storage = _storage;
+// Exported so App.tsx can show a fatal error screen for runtime init failures
+// (distinct from fatalConfigError which covers missing/placeholder env vars).
+export const initError: string | null = _initError;
 
 // Collection names — single source of truth. Snake_case matches the documented
 // Firestore schema (stock_balances, audit_logs, country_rates).

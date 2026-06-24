@@ -70,6 +70,8 @@ export interface Variant {
   qtyPerRoll?: number;       // nominal length per roll (e.g. 25)
   uom?: string;              // stock unit (Yard, Meter…)
   totalQty?: number;         // rollQty × qtyPerRoll (or accumulated received qty)
+  // TODO (post-pilot): move cost + totalValue to variant_costs/{id} subcollection
+  // restricted to view_costs roles. See SECURITY_NOTES.md. Do NOT migrate during pilot.
   cost?: number;             // latest landed cost per UOM (FOB × rate)
   totalValue?: number;       // totalQty × cost
   lastReceiveDate?: number;  // last receiving timestamp

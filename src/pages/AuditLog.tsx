@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { PageHeader, Badge } from '../components/ui';
+import { can } from '../lib/permissions';
+import { sanitizeRemarks } from '../lib/sanitizeRemarks';
 import type { MovementAction } from '../types';
 
 const ACTIONS: MovementAction[] = [
@@ -14,7 +16,8 @@ const ACTION_TONE: Record<string, 'ok' | 'info' | 'low' | 'out' | 'neutral'> = {
 };
 
 export function AuditLogPage() {
-  const { audit, users, products, shops, visibleShopIds, shopName, productName } = useStore();
+  const { audit, users, products, shops, visibleShopIds, shopName, productName, user } = useStore();
+  const showCosts = can(user?.role, 'view_costs');
   const [userF, setUserF] = useState('all');
   const [actionF, setActionF] = useState('all');
   const [shopF, setShopF] = useState('all');
@@ -90,7 +93,7 @@ export function AuditLogPage() {
                   {a.qtyChanged > 0 ? '+' : ''}{a.qtyChanged || '—'}
                 </td>
                 <td className="px-4 py-3 text-right font-bold text-ink-900">{a.qtyAfter}</td>
-                <td className="px-4 py-3 text-xs text-ink-400">{a.remarks ?? '—'}</td>
+                <td className="px-4 py-3 text-xs text-ink-400">{sanitizeRemarks(a.remarks, showCosts)}</td>
               </tr>
             ))}
             {rows.length === 0 && (

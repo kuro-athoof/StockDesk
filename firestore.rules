@@ -24,6 +24,9 @@ service cloud.firestore {
 
     // Roles that may approve adjustments (damage write-off, stock-count corrections).
     // Mirrors permissions.ts: only admin + purchase_manager hold 'approve_adjustment'.
+    // canApprove() maps to the approve_adjustment capability:
+    //   admin + purchase_manager only. shop_manager intentionally excluded —
+    //   UI does not grant shop_manager approve_adjustment, consistent here.
     function canApprove() { return isAdmin() || isPurchaseMgr(); }
 
     // Roles that see every shop's data.
@@ -94,6 +97,15 @@ service cloud.firestore {
     // Stock balances: scoped reads; writes only by stock-moving roles.
     // Numeric validation + immutable identity fields.
     // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // Stock balances: operational source of truth. Scoped by ownerShopId.
+    // Parity note (intentional): warehouse_staff can create/update balances.
+    // This is required by the movement engine (applyAtomicBatch, applyMovement)
+    // which writes directly to stock_balances on every receive/transfer/count.
+    // Audit-pairing is enforced by application logic (runTransaction writes both
+    // balance + audit log atomically); it cannot be enforced in Firestore rules
+    // without a backend function. Identity fields are immutable after creation.
+    // ─────────────────────────────────────────────────────────────────────────
     match /stock_balances/{id} {
       allow read: if canRead() && canSeeShop(resource.data.ownerShopId);
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
@@ -138,6 +150,9 @@ service cloud.firestore {
     match /cost_history/{id} {
       allow read: if (isAdmin() || isPurchaseMgr() || isShopMgr() || isAuditor())
                    && canSeeShop(resource.data.ownerShopId);
+      // Parity note (intentional): warehouse can create cost_history records
+      // because the receiving transaction writes them. Warehouse cannot READ them
+      // (lacks view_costs). The client does not subscribe warehouse to this collection.
       allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse())
                      && canSeeShop(request.resource.data.ownerShopId);
       allow update, delete: if false; // immutable cost record

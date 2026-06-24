@@ -232,7 +232,7 @@ export function WarehouseMode() {
     const res = await applyLocalMovement({
       variant: found, ownerShopId: shopId, qtyChanged: qty, unit, action: 'RECEIVE',
       rollDelta: isFabric ? pcs : undefined,
-      remarks: `WH quick receive using existing cost ${latestCost}${mNotes ? ': ' + mNotes : ''}`,
+      remarks: `WH quick receive using existing product cost${mNotes ? ': ' + mNotes : ''}`,
     });
     if (res.ok) { showToast(`Received +${qty} ${unit}${pcs ? ', ' + pcs + ' PCS' : ''} ✓`); closeModal(); }
     else showToast(res.error ?? 'Failed', false);

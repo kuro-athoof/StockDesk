@@ -3,6 +3,7 @@ import { useStore } from '../context/StoreContext';
 import { PageHeader, Badge, EmptyState, Modal, Field } from '../components/ui';
 import { PRODUCT_TYPE_LABELS, type ProductType, type Product, type Variant } from '../types';
 import { can } from '../lib/permissions';
+import { sanitizeRemarks } from '../lib/sanitizeRemarks';
 
 // P3: Product aggregates read from scopedBalances (operational source of truth),
 // with cost/UOM metadata from variant fields.
@@ -322,6 +323,7 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
               <h3 className="text-sm font-bold text-ink-900">Variants (Colors)</h3>
               {editable && <button className="btn-ghost text-xs" onClick={() => setEditVariant('new')}>+ Add Color</button>}
             </div>
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-ink-100 text-left text-[10px] font-semibold uppercase tracking-wide text-ink-400">
@@ -355,6 +357,7 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
                 {variants.length === 0 && <tr><td colSpan={9} className="py-4 text-center text-sm text-ink-400">No colors yet.</td></tr>}
               </tbody>
             </table>
+            </div>
             {variants.length > 0 && (
               <div className={`mt-3 grid gap-2 rounded-lg bg-ink-50 p-3 text-center text-xs ${showCosts ? 'grid-cols-3' : 'grid-cols-2'}`}>
                 <div><div className="text-ink-400">PCS</div><div className="font-bold text-ink-800">{summary.totalPcs}</div></div>
@@ -403,7 +406,7 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
                       </button>
                     ))}
                   </div>
-                  <VariantHistory variantId={v.id} tab={tab} audit={audit} />
+                  <VariantHistory variantId={v.id} tab={tab} audit={audit} showCosts={showCosts} />
                 </div>
               );
             })() : <div className="py-8 text-center text-sm text-ink-400">Select a variant to view details.</div>}
@@ -456,10 +459,11 @@ function ProductDetail({ product, variants, supplierName, editable, onClose, onE
 }
 
 
-function VariantHistory({ variantId, tab, audit }: {
+function VariantHistory({ variantId, tab, audit, showCosts }: {
   variantId: string;
   tab: 'receipts' | 'transfers' | 'history';
   audit: import('../types').AuditLog[];
+  showCosts: boolean;
 }) {
   const want = tab === 'receipts' ? 'RECEIVE' : tab === 'transfers' ? 'TRANSFER_OUT' : null;
   const entries = audit.filter((a) => a.variantId === variantId && (want == null || a.action === want))
@@ -474,7 +478,7 @@ function VariantHistory({ variantId, tab, audit }: {
           <td>{a.action.replace(/_/g, ' ')}</td>
           <td className="text-right">{a.qtyChanged}</td>
           <td>{a.userName}</td>
-          <td className="max-w-[200px] truncate text-ink-400" title={a.remarks}>{a.remarks}</td>
+          <td className="max-w-[200px] truncate text-ink-400" title={showCosts ? (a.remarks ?? '') : sanitizeRemarks(a.remarks, false)}>{sanitizeRemarks(a.remarks, showCosts)}</td>
         </tr>
       ))}</tbody>
     </table>
