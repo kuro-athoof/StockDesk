@@ -36,8 +36,12 @@ const MATRIX: Record<Role, Capability[]> = {
     'view_reports', 'request_stock', 'confirm_transfer', 'view_costs',
     'approve_ownership_transfer', 'override_negative',
   ],
+  // P1: warehouse_staff no longer hold receive_stock.
+  // Full costed receiving (FOB, cost, total value) is restricted to Admin and
+  // Purchase Manager. Warehouse staff use Warehouse Mode quick-receive only,
+  // which does not show cost fields and requires a pre-existing cost record.
   warehouse_staff: [
-    'receive_stock', 'transfer_stock', 'perform_count',
+    'transfer_stock', 'perform_count',
   ],
   auditor: [
     'view_reports', 'export_reports', 'view_costs',

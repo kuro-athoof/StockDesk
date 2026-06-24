@@ -197,6 +197,15 @@ export class DuplicateOperationError extends Error {
   constructor(msg: string) { super(msg); this.name = 'DuplicateOperationError'; }
 }
 
+export class ConflictError extends Error {
+  readonly conflicts: string[];
+  constructor(conflicts: string[]) {
+    super(`Stock changed after count was submitted. Please recount.\n\nConflicts:\n${conflicts.join('\n')}`);
+    this.name = 'ConflictError';
+    this.conflicts = conflicts;
+  }
+}
+
 export async function applyAtomicBatch(args: {
   lines: MovementLineSpec[];
   action: MovementAction;
@@ -204,8 +213,18 @@ export async function applyAtomicBatch(args: {
   refId?: string;
   canOverride: boolean;
   statusDoc?: { collection: string; id: string; expectStatus: string; newFields: Record<string, unknown> };
+  // P2: optional conflict checks run INSIDE the transaction after reading balances.
+  // Each entry specifies expected balance values; if the current value differs,
+  // the transaction aborts with a ConflictError — preventing stale count approvals.
+  conflictChecks?: Array<{
+    variantId: string;
+    ownerShopId: string;
+    expectedQty: number;
+    expectedRolls?: number;
+    label?: string;  // human-readable identifier for the error message
+  }>;
 }): Promise<void> {
-  const { lines, action, user, refId, canOverride, statusDoc } = args;
+  const { lines, action, user, refId, canOverride, statusDoc, conflictChecks } = args;
   if (!db) throw new Error('Firebase not configured — applyAtomicBatch requires live mode');
   const fdb = db;
 
@@ -222,45 +241,101 @@ export async function applyAtomicBatch(args: {
       }
     }
 
-    // 2. Read all balances first (Firestore requires all reads before writes).
-    const reads = await Promise.all(lines.map((l) => {
+    // P3: group lines by balance key BEFORE reading — multiple lines targeting
+    // the same (variantId + ownerShopId) must be aggregated into a single delta
+    // so we read each balance doc exactly once and write it exactly once.
+    // Without this, two lines both reading "before=100" would each compute
+    // independently, and the second write would overwrite the first.
+    type AggLine = {
+      variant: Variant;
+      ownerShopId: string;
+      unit: string;
+      qtyDelta: number;
+      rollDelta: number;
+      remarks: string[];
+    };
+    const aggMap = new Map<string, AggLine>();
+    for (const l of lines) {
       const bId = balanceId(l.variant.id, l.ownerShopId);
-      return tx.get(doc(fdb, COL.balances, bId)).then((snap) => ({ l, bId, snap }));
-    }));
+      const existing = aggMap.get(bId);
+      if (existing) {
+        existing.qtyDelta  += l.qtyChanged;
+        existing.rollDelta += l.rollDelta ?? 0;
+        if (l.remarks) existing.remarks.push(l.remarks);
+      } else {
+        aggMap.set(bId, {
+          variant: l.variant, ownerShopId: l.ownerShopId, unit: l.unit,
+          qtyDelta: l.qtyChanged, rollDelta: l.rollDelta ?? 0,
+          remarks: l.remarks ? [l.remarks] : [],
+        });
+      }
+    }
+    const aggLines = [...aggMap.entries()]; // [bId, AggLine][]
 
-    // 3. Validate negative-stock rule across all lines before writing anything.
-    for (const { l, snap } of reads) {
+    // 2. Read all (unique) balances — Firestore requires all reads before writes.
+    const reads = await Promise.all(aggLines.map(([bId, agg]) =>
+      tx.get(doc(fdb, COL.balances, bId)).then((snap) => ({ bId, agg, snap })),
+    ));
+
+    // 3. P2: In-transaction conflict checks — run AFTER reading balances so we
+    // compare against the authoritative live value, not stale React state.
+    // If a balance changed between count submission and approval, abort.
+    if (conflictChecks && conflictChecks.length > 0) {
+      const conflictMessages: string[] = [];
+      for (const check of conflictChecks) {
+        const bId = balanceId(check.variantId, check.ownerShopId);
+        // Find in already-read set to avoid a second read for the same balance.
+        const existingRead = reads.find((r) => r.bId === bId);
+        const balSnap = existingRead ? existingRead.snap : await tx.get(doc(fdb, COL.balances, bId));
+        const currentQty   = balSnap.exists() ? Math.round((balSnap.data() as Balance).quantity * 100) / 100 : 0;
+        const currentRolls = balSnap.exists() ? ((balSnap.data() as Balance).rollCount ?? 0) : 0;
+        if (
+          Math.abs(currentQty - check.expectedQty) > 0.001 ||
+          (check.expectedRolls !== undefined && currentRolls !== check.expectedRolls)
+        ) {
+          conflictMessages.push(
+            `${check.label ?? check.variantId}: expected ${check.expectedQty} qty${check.expectedRolls !== undefined ? ` / ${check.expectedRolls} PCS` : ''}, ` +
+            `current ${currentQty} qty / ${currentRolls} PCS`,
+          );
+        }
+      }
+      if (conflictMessages.length > 0) throw new ConflictError(conflictMessages);
+    }
+
+    // 4. Validate negative-stock rule across all aggregated lines.
+    for (const { agg, snap } of reads) {
       const before = snap.exists() ? (snap.data() as Balance).quantity : 0;
-      const after = before + l.qtyChanged;
+      const after = before + agg.qtyDelta;
       if (after < 0 && !canOverride) {
-        throw new NegativeStockError(before, Math.abs(l.qtyChanged));
+        throw new NegativeStockError(before, Math.abs(agg.qtyDelta));
       }
     }
 
-    // 4. Write all balances + audit logs.
-    for (const { l, bId, snap } of reads) {
-      const before = snap.exists() ? (snap.data() as Balance).quantity : 0;
-      const beforeRolls = snap.exists() ? ((snap.data() as Balance).rollCount ?? 0) : 0;
-      const after = before + l.qtyChanged;
-      const newRolls = Math.max(0, beforeRolls + (l.rollDelta ?? 0));
+    // 4. Write one balance doc + one audit log per unique balance key.
+    for (const { bId, agg, snap } of reads) {
+      const before       = snap.exists() ? (snap.data() as Balance).quantity : 0;
+      const beforeRolls  = snap.exists() ? ((snap.data() as Balance).rollCount ?? 0) : 0;
+      const after        = before + agg.qtyDelta;
+      const newRolls     = Math.max(0, beforeRolls + agg.rollDelta);
 
       const balanceData: Record<string, unknown> = {
-        id: bId, variantId: l.variant.id, productId: l.variant.productId,
-        ownerShopId: l.ownerShopId, quantity: after, unit: l.unit,
-        rollCount: l.variant.productType === 'general' ? undefined : newRolls,
+        id: bId, variantId: agg.variant.id, productId: agg.variant.productId,
+        ownerShopId: agg.ownerShopId, quantity: after, unit: agg.unit,
+        rollCount: agg.variant.productType === 'general' ? undefined : newRolls,
         locationId: snap.exists() ? (snap.data() as Balance).locationId : undefined,
         updatedAt: Date.now(),
       };
       Object.keys(balanceData).forEach((k) => balanceData[k] === undefined && delete balanceData[k]);
       tx.set(doc(fdb, COL.balances, bId), balanceData);
 
+      const combinedRemarks = agg.remarks.join(' | ');
       const auditRef = doc(collection(fdb, COL.audit));
       tx.set(auditRef, {
         timestamp: Date.now(), serverTime: serverTimestamp(),
         userId: user.uid, userName: user.name, action,
-        productId: l.variant.productId, variantId: l.variant.id, ownerShopId: l.ownerShopId,
-        qtyBefore: before, qtyChanged: l.qtyChanged, qtyAfter: after,
-        ...(l.remarks ? { remarks: l.remarks } : {}),
+        productId: agg.variant.productId, variantId: agg.variant.id, ownerShopId: agg.ownerShopId,
+        qtyBefore: before, qtyChanged: agg.qtyDelta, qtyAfter: after,
+        ...(combinedRemarks ? { remarks: combinedRemarks } : {}),
         ...(refId ? { refId } : {}),
       });
     }

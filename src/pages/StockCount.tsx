@@ -70,6 +70,7 @@ function RejectDialog({ onConfirm, onCancel }: { onConfirm: (note: string) => vo
 // ── List page ────────────────────────────────────────────────────────────────
 export function StockCount() {
   const { user, stockCounts, visibleShopIds, shopName, deleteCountDraft } = useStore();
+  const showCosts = can(user?.role, 'view_costs'); // P2: hide MVR variance from warehouse staff
   const [editing, setEditing] = useState<Count | 'new' | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -128,7 +129,8 @@ export function StockCount() {
                 <tr className="border-b border-ink-100 bg-ink-50 text-left text-xs font-semibold uppercase tracking-wide text-ink-400">
                   <th className="px-4 py-3">Count No</th><th className="px-4 py-3">Shop</th><th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3">Date</th><th className="px-4 py-3 text-right">Lines</th>
-                  <th className="px-4 py-3 text-right">Variance (MVR)</th><th className="px-4 py-3">Approved By</th>
+                  {showCosts && <th className="px-4 py-3 text-right">Variance (MVR)</th>}
+                  <th className="px-4 py-3">Approved By</th>
                   <th className="px-4 py-3">Status</th><th className="px-4 py-3" />
                 </tr>
               </thead>
@@ -140,9 +142,11 @@ export function StockCount() {
                     <td className="px-4 py-3 capitalize text-ink-500">{c.countType ?? 'full'}</td>
                     <td className="px-4 py-3 text-ink-500">{c.date}</td>
                     <td className="px-4 py-3 text-right text-ink-600">{c.lines.length}</td>
+                    {showCosts && (
                     <td className="px-4 py-3 text-right">
                       {c.varianceValueMvr != null ? <span className={c.varianceValueMvr < 0 ? 'text-red-600 font-semibold' : 'text-ink-600'}>{c.varianceValueMvr > 0 ? '+' : ''}{c.varianceValueMvr.toFixed(2)}</span> : <span className="text-ink-300">—</span>}
                     </td>
+                    )}
                     <td className="px-4 py-3 text-ink-500 text-xs">{c.approvedBy ? c.approvedBy.slice(0, 8) + '…' : '—'}</td>
                     <td className="px-4 py-3"><Badge tone={STATUS_TONE[c.status]}>{STATUS_LABEL[c.status]}</Badge></td>
                     <td className="px-4 py-3 text-right">
@@ -169,6 +173,7 @@ function CountEditor({ count, onClose }: { count: Count | null; onClose: () => v
     nextCountNo, saveCount, submitCount, approveCount, rejectCount,
     deleteCountDraft, productName,
   } = useStore();
+  const showCosts = can(user?.role, 'view_costs'); // P2: hide MVR variance from warehouse staff
 
   const editableShops = shops.filter((s) => visibleShopIds.includes(s.id));
 
@@ -615,9 +620,11 @@ function CountEditor({ count, onClose }: { count: Count | null; onClose: () => v
             <SummaryCell label="Total Qty variance"  value={(summary.totalQtyVariance > 0 ? '+' : '') + summary.totalQtyVariance}
               tone={summary.totalQtyVariance !== 0 ? 'red' : 'green'} />
             <SummaryCell label="Positive adjustments" value={String(summary.positiveAdj)} tone="green" />
+            {showCosts && (
             <SummaryCell label="Est. value diff (MVR)"
               value={(summary.varianceValueMvr > 0 ? '+' : '') + summary.varianceValueMvr.toFixed(2)}
               tone={summary.varianceValueMvr < 0 ? 'red' : summary.varianceValueMvr > 0 ? 'amber' : 'green'} />
+            )}
           </div>
         </div>
       )}

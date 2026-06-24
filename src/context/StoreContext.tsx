@@ -12,12 +12,12 @@ import {
   DEMO_LOCATIONS, DEMO_SUPPLIERS, DEMO_RATES, DEMO_AUDIT, DEMO_CATEGORIES,
   DEMO_SETTINGS, type AppSettings, loginByUid,
 } from '../lib/demoData';
-import { balanceId, NegativeStockError, applyMovement, applyAtomicBatch, DuplicateOperationError, type MovementLineSpec } from '../lib/movement';
+import { balanceId, NegativeStockError, applyMovement, applyAtomicBatch, DuplicateOperationError, ConflictError, type MovementLineSpec } from '../lib/movement';
 import { suggestVariantBarcode, isBarcodeTaken } from '../lib/dataQuality';
 import { firebaseConfigured, auth, db, COL } from '../lib/firebase';
 import { repo, subscribe, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize } from '../lib/firestoreRepo';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc, runTransaction } from 'firebase/firestore';
+import { doc, getDoc, runTransaction, collection } from 'firebase/firestore';
 
 interface MoveArgs {
   variant: Variant;
@@ -405,17 +405,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (headerRate <= 0) return { ok: false, error: 'Country rate is missing or invalid. Set a rate in Administration → Country Rates.' };
 
     const ts = Date.now();
-    const balanceWrites: Balance[] = [];
+    // P1: Pre-compute everything that does NOT depend on current balance values.
+    // Balance quantities are computed INSIDE the Firestore transaction after
+    // re-reading from Firestore, so concurrent operations cannot be overwritten.
     const costWrites: CostHistory[] = [];
     const auditWrites: AuditLog[] = [];
     const newVariants: Variant[] = [];
     const variantPatches = new Map<string, Partial<Variant>>();
-    const balAcc = new Map<string, number>();
+
+    type LineResolved = {
+      variant: Variant;
+      isGeneral: boolean;
+      cost: number;
+      pcs: number;
+      stockUom: string;
+      bId: string;
+      lineQty: number;
+    };
+    const resolvedLines: LineResolved[] = [];
 
     for (const line of rcv.lines) {
       const product = products.find((p) => p.id === line.productId);
       const isGeneral = product?.type === 'general';
-      // General inventory may receive at product level (no explicit variant).
       let variant = variants.find((v) => v.id === line.variantId)
         ?? [...newVariants].find((v) => v.productId === line.productId);
       if (!variant && isGeneral && product) {
@@ -426,13 +437,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!variant) return { ok: false, error: 'Variant missing for a line' };
       const stockUom = line.stockUom || 'Pcs';
 
-      // Cost = (FOB ÷ FOB Unit) × Header Country Rate (rate is ALWAYS from header, not per-line)
       const cost = (line.fobValue != null && (line.fobValue ?? 0) > 0)
         ? Math.round((line.fobValue / Math.max(line.fobUomUnit ?? 1, 0.001)) * headerRate * 100) / 100
         : (line.cost ?? variant.cost ?? 0);
       const pcs = isGeneral ? 0 : (line.rollQty ?? 0);
 
-      // Auto-generate a variant barcode if fabric has none.
       if (!isGeneral && !variant.barcode?.trim()) {
         const prefix = suggestVariantBarcode({ name: product?.name ?? 'PRD' },
           { ourColorNumber: variant.ourColorNumber, designNumber: variant.designNumber, label: variant.label }, allBarcodes);
@@ -442,55 +451,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         variant = { ...variant, barcode: prefix };
       }
 
-      // Balance (owner stock) update — no undefined fields (Firestore rejects them).
       const bId = balanceId(variant.id, rcv.ownerShopId);
-      const existingQty = balAcc.get(bId) ?? balanceOf(variant.id, rcv.ownerShopId)?.quantity ?? 0;
-      const newQty = Math.round((existingQty + line.quantity) * 100) / 100;
-      balAcc.set(bId, newQty);
-      const balanceEntry: Balance = {
-        id: bId, variantId: variant.id, productId: variant.productId, ownerShopId: rcv.ownerShopId,
-        quantity: newQty, unit: stockUom, updatedAt: ts,
-      };
-      // Only include rollCount for fabric (Firestore rejects undefined).
-      if (!isGeneral) {
-        const existingPcs = balances.find((b) => b.id === bId)?.rollCount ?? 0;
-        balanceEntry.rollCount = existingPcs + pcs;
-      }
-      balanceWrites.push(balanceEntry);
-
-      // Variant aggregate update — DISPLAY METADATA ONLY (not operational source).
-      // Phase 7: derive the aggregate from the authoritative balance (newQty/newRolls
-      // computed above from stock_balances), NOT from the variant's own previous
-      // aggregate. This makes the display field self-heal from the source of truth
-      // and prevents drift after count corrections.
-      if (!isGeneral) {
-        const prev = variantPatches.get(variant.id) ?? {};
-        const nextTotalQty = newQty; // from balance accumulation (source of truth)
-        const nextRolls = balanceEntry.rollCount ?? 0; // from balance accumulation
-        const patch: Partial<Variant> = {
-          ...prev,
-          rollQty: nextRolls,
-          uom: stockUom,
-          totalQty: nextTotalQty,
-          cost,
-          totalValue: Math.round(nextTotalQty * cost * 100) / 100,
-          lastReceiveDate: ts,
-        };
-        // Only write qtyPerRoll if it has a real value — never write undefined to Firestore.
-        const qpr = line.qtyPerRoll ?? variant.qtyPerRoll;
-        if (qpr != null) patch.qtyPerRoll = qpr;
-        variantPatches.set(variant.id, patch);
-      }
-
-      const lineValue = Math.round(line.quantity * cost * 100) / 100;
-      auditWrites.push({
-        id: uid('aud'), timestamp: ts, userId: user.uid, userName: user.name,
-        action: 'RECEIVE', productId: variant.productId, variantId: variant.id, ownerShopId: rcv.ownerShopId,
-        qtyBefore: existingQty, qtyChanged: line.quantity, qtyAfter: newQty,
-        remarks: `Receiving ${rcv.receivingNo}: +${line.quantity} ${stockUom}` +
-          (pcs ? `, ${pcs} pcs` : '') + `, cost ${cost}/${stockUom}, value ${lineValue} MVR`,
-        refId: rcv.receivingNo,
-      });
+      resolvedLines.push({ variant, isGeneral, cost, pcs, stockUom, bId, lineQty: line.quantity });
 
       if (line.fobValue != null && (line.fobValue ?? 0) > 0) {
         costWrites.push({
@@ -506,31 +468,114 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (LIVE && db) {
       try {
         const database = db;
-        // P0.2: re-read the receiving inside a transaction and abort if it's no
-        // longer a draft (i.e. another click already posted it). This makes the
-        // post idempotent even across tabs/devices. The bulk writes are then
-        // applied in the same transaction so stock + status commit together.
+        // P1: All balance reads AND writes happen inside this single transaction.
+        // Re-reading from Firestore means we apply deltas on top of the true live
+        // value, not the stale React-state value computed before the transaction.
         await runTransaction(database, async (tx) => {
+          // Status guard: abort if already posted (duplicate-click protection).
           const rcvRef = doc(database, COL.receivings, rcv.id);
-          const snap = await tx.get(rcvRef);
-          if (snap.exists()) {
-            const cur = snap.data() as Receiving;
+          const rcvSnap = await tx.get(rcvRef);
+          if (rcvSnap.exists()) {
+            const cur = rcvSnap.data() as Receiving;
             if (cur.status === 'posted' || cur.postedAt != null) {
               throw new DuplicateOperationError('Receiving already posted');
             }
           }
+
+          // Read each unique balance doc exactly once.
+          const uniqueBalIds = [...new Set(resolvedLines.map((r) => r.bId))];
+          const balSnaps = new Map<string, import('firebase/firestore').DocumentSnapshot>();
+          await Promise.all(uniqueBalIds.map(async (bId) => {
+            balSnaps.set(bId, await tx.get(doc(database, COL.balances, bId)));
+          }));
+
+          // Aggregate deltas per balance key (multiple lines → same balance).
+          const balDelta = new Map<string, { qtyDelta: number; rollDelta: number; unit: string; variantId: string; productId: string }>();
+          for (const r of resolvedLines) {
+            const existing = balDelta.get(r.bId);
+            if (existing) { existing.qtyDelta += r.lineQty; existing.rollDelta += r.pcs; }
+            else balDelta.set(r.bId, { qtyDelta: r.lineQty, rollDelta: r.pcs, unit: r.stockUom, variantId: r.variant.id, productId: r.variant.productId });
+          }
+
+          // Write one balance doc per unique key using live (transaction-read) values.
+          for (const [bId, delta] of balDelta) {
+            const snap = balSnaps.get(bId);
+            const exQty    = snap?.exists() ? (snap.data() as Balance).quantity : 0;
+            const exRolls  = snap?.exists() ? ((snap.data() as Balance).rollCount ?? 0) : 0;
+            const newQty   = Math.round((exQty + delta.qtyDelta) * 100) / 100;
+            const newRolls = exRolls + delta.rollDelta;
+            const locId    = snap?.exists() ? (snap.data() as Balance).locationId : undefined;
+            const balData: Record<string, unknown> = {
+              id: bId, variantId: delta.variantId, productId: delta.productId,
+              ownerShopId: rcv.ownerShopId, quantity: newQty, unit: delta.unit, updatedAt: ts,
+              ...(delta.rollDelta > 0 || exRolls > 0 ? { rollCount: newRolls } : {}),
+              ...(locId ? { locationId: locId } : {}),
+            };
+            tx.set(doc(database, COL.balances, bId), balData);
+          }
+
+          // Audit logs — derive qtyBefore/qtyAfter from transaction-read balances.
+          for (const r of resolvedLines) {
+            const snap     = balSnaps.get(r.bId);
+            const qtyBefore = snap?.exists() ? (snap.data() as Balance).quantity : 0;
+            const qtyAfter  = Math.round((qtyBefore + r.lineQty) * 100) / 100;
+            const auditRef  = doc(collection(database, COL.audit));
+            tx.set(auditRef, {
+              id: uid('aud'), timestamp: ts, userId: user.uid, userName: user.name,
+              action: 'RECEIVE', productId: r.variant.productId, variantId: r.variant.id, ownerShopId: rcv.ownerShopId,
+              qtyBefore, qtyChanged: r.lineQty, qtyAfter,
+              remarks: `Receiving ${rcv.receivingNo}: +${r.lineQty} ${r.stockUom}${r.pcs ? `, ${r.pcs} pcs` : ''}`,
+              refId: rcv.receivingNo,
+            });
+          }
+
+          // Variant metadata (display aggregates) derived from live transaction values.
           newVariants.forEach((v) => tx.set(doc(database, COL.variants, v.id), deepSanitize(v as unknown as Record<string, unknown>)));
           variantPatches.forEach((p, vid) => tx.update(doc(database, COL.variants, vid), deepSanitize(p as Record<string, unknown>)));
-          balanceWrites.forEach((b) => tx.set(doc(database, COL.balances, b.id), deepSanitize(b as unknown as Record<string, unknown>)));
           costWrites.forEach((c) => tx.set(doc(database, COL.costHistory, c.id), deepSanitize(c as unknown as Record<string, unknown>)));
-          auditWrites.forEach((a) => tx.set(doc(database, COL.audit, a.id), deepSanitize(a as unknown as Record<string, unknown>)));
-          tx.set(rcvRef, deepSanitize(posted as unknown as Record<string, unknown>));
+          for (const r of resolvedLines) {
+            if (!r.isGeneral) {
+              const snap    = balSnaps.get(r.bId);
+              const exQty   = snap?.exists() ? (snap.data() as Balance).quantity : 0;
+              const exRolls = snap?.exists() ? ((snap.data() as Balance).rollCount ?? 0) : 0;
+              const nQty    = Math.round((exQty + r.lineQty) * 100) / 100;
+              const nRolls  = exRolls + r.pcs;
+              tx.update(doc(database, COL.variants, r.variant.id), deepSanitize({
+                rollQty: nRolls, uom: r.stockUom, totalQty: nQty,
+                cost: r.cost, totalValue: Math.round(nQty * r.cost * 100) / 100, lastReceiveDate: ts,
+              } as Record<string, unknown>));
+            }
+          }
+          tx.set(doc(database, COL.receivings, rcv.id), deepSanitize(posted as unknown as Record<string, unknown>));
         });
       } catch (e) {
         if (e instanceof DuplicateOperationError) return { ok: false, error: e.message };
         return { ok: false, error: `Atomic post failed: ${(e as Error).message}` };
       }
     } else {
+      // Demo mode: compute from React state (no real transactions).
+      const balAccDemo = new Map<string, number>();
+      const balWritesDemo: Balance[] = [];
+      for (const r of resolvedLines) {
+        const exQty   = balAccDemo.get(r.bId) ?? balanceOf(r.variant.id, rcv.ownerShopId)?.quantity ?? 0;
+        const exRolls = balances.find((b) => b.id === r.bId)?.rollCount ?? 0;
+        const newQty  = Math.round((exQty + r.lineQty) * 100) / 100;
+        const newRolls = exRolls + r.pcs;
+        balAccDemo.set(r.bId, newQty);
+        const entry: Balance = { id: r.bId, variantId: r.variant.id, productId: r.variant.productId, ownerShopId: rcv.ownerShopId, quantity: newQty, unit: r.stockUom, updatedAt: ts };
+        if (!r.isGeneral) entry.rollCount = newRolls;
+        balWritesDemo.push(entry);
+        auditWrites.push({
+          id: uid('aud'), timestamp: ts, userId: user.uid, userName: user.name,
+          action: 'RECEIVE', productId: r.variant.productId, variantId: r.variant.id, ownerShopId: rcv.ownerShopId,
+          qtyBefore: exQty, qtyChanged: r.lineQty, qtyAfter: newQty,
+          remarks: `Receiving ${rcv.receivingNo}: +${r.lineQty} ${r.stockUom}${r.pcs ? `, ${r.pcs} pcs` : ''}`,
+          refId: rcv.receivingNo,
+        });
+        if (!r.isGeneral) {
+          variantPatches.set(r.variant.id, { ...(variantPatches.get(r.variant.id) ?? {}), rollQty: newRolls, uom: r.stockUom, totalQty: newQty, cost: r.cost, totalValue: Math.round(newQty * r.cost * 100) / 100, lastReceiveDate: ts });
+        }
+      }
       setVariants((prev) => {
         let next = newVariants.length ? [...prev, ...newVariants] : prev;
         if (variantPatches.size) next = next.map((v) => variantPatches.has(v.id) ? { ...v, ...variantPatches.get(v.id) } : v);
@@ -538,7 +583,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
       setBalances((prev) => {
         const map = new Map(prev.map((b) => [b.id, b]));
-        balanceWrites.forEach((b) => map.set(b.id, b));
+        balWritesDemo.forEach((b) => map.set(b.id, b));
         return [...map.values()];
       });
       if (costWrites.length) setCostHistory((prev) => [...costWrites, ...prev]);
@@ -840,45 +885,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     const ts = Date.now();
 
-    // --- Conflict detection first pass (read-only) ---
-    const conflicts: string[] = [];
-    for (const line of c.lines) {
-      const bal = balances.find((b) => b.variantId === line.variantId && b.ownerShopId === c.shopId);
-      const currentQty = Math.round((bal?.quantity ?? 0) * 100) / 100;
-      const currentPcs = bal?.rollCount ?? 0;
-      // If current balance differs from what was snapshot at submit (expectedQuantity/expectedRolls),
-      // stock moved between submit and now — the count is stale.
-      if (
-        Math.abs(currentQty - (line.expectedQuantity ?? 0)) > 0.001 ||
-        currentPcs !== (line.expectedRolls ?? 0)
-      ) {
-        const v = variants.find((x) => x.id === line.variantId);
-        conflicts.push(
-          `${v?.barcode ?? line.variantId}: expected ${line.expectedQuantity} qty / ${line.expectedRolls ?? 0} PCS, ` +
-          `current ${currentQty} qty / ${currentPcs} PCS`,
-        );
-      }
-    }
-    if (conflicts.length > 0) {
+    // P2: Build conflict checks to run INSIDE the atomic transaction.
+    // This eliminates the TOCTOU window between the old pre-transaction check
+    // and the commit — the comparison now runs on transaction-read (authoritative)
+    // balance values, so any concurrent stock change between submission and approval
+    // is detected and the transaction aborts cleanly.
+    const conflictChecks = c.lines.map((line) => {
+      const v = variants.find((x) => x.id === line.variantId);
       return {
-        ok: false,
-        error: `Stock changed after this count was submitted. Please recount or refresh count.\n\nConflicts:\n${conflicts.join('\n')}`,
-        conflict: true,
+        variantId: line.variantId,
+        ownerShopId: c.shopId,
+        expectedQty: line.expectedQuantity ?? 0,
+        expectedRolls: line.expectedRolls,
+        label: v?.barcode ?? line.variantId,
       };
-    }
+    });
 
-    // --- Apply atomically (Phase 5) ---
-    // Build one line per changed variant. qtyChanged is the delta needed to reach
-    // the physically-counted absolute value (newQty). applyAtomicBatch applies
-    // balance + audit + count-status flip in ONE transaction, guarded by
-    // expectStatus 'submitted' so a duplicate approval is rejected.
+    // Build batch lines — delta = (actualQty - expectedQty), so balance reaches actualQty absolutely.
+    // In-transaction conflict check ensures expectedQty still matches current balance before applying.
     const batchLines: MovementLineSpec[] = [];
     for (const line of c.lines) {
       const variant = variants.find((v) => v.id === line.variantId);
       if (!variant) continue;
-      const bal = balances.find((b) => b.variantId === line.variantId && b.ownerShopId === c.shopId);
-      const oldQty = Math.round((bal?.quantity ?? 0) * 100) / 100;
-      const oldPcs = bal?.rollCount ?? 0;
+      const oldQty = line.expectedQuantity ?? 0; // expected = what balance was at submit
+      const oldPcs = line.expectedRolls ?? 0;
       const newQty = Math.max(0, Math.round((line.actualQuantity ?? 0) * 100) / 100);
       const newPcs = Math.max(0, line.actualRolls ?? 0);
       const qtyDelta = Math.round((newQty - oldQty) * 100) / 100;
@@ -899,11 +929,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       try {
         await applyAtomicBatch({
           lines: batchLines, action: 'STOCK_COUNT_CORRECTION', user, refId: c.countNo,
-          canOverride: true, // count approval sets absolute physical values (can go to 0, never negative by construction)
+          canOverride: true,
           statusDoc: { collection: COL.counts, id, expectStatus: 'submitted', newFields: { status: 'approved', approvedAt: ts, approvedBy: user.uid } },
+          conflictChecks,  // P2: conflict check runs inside the transaction
         });
       } catch (e) {
         if (e instanceof DuplicateOperationError) return { ok: false, error: e.message };
+        if (e instanceof ConflictError) return { ok: false, error: e.message, conflict: true };
         return { ok: false, error: (e as Error).message };
       }
       // Sync local state + variant aggregates (display metadata only).
