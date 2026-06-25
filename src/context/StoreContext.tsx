@@ -883,7 +883,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const c = stockCounts.find((x) => x.id === id);
     if (!c) return { ok: false, error: 'Count not found' };
     if (c.status !== 'submitted') return { ok: false, error: 'Only submitted counts can be approved' };
-    if (!can(user?.role, 'approve_adjustment')) return { ok: false, error: 'Not authorized to approve' };
+    const canApproveCount = can(user?.role, 'approve_adjustment')
+      || (can(user?.role, 'approve_own_shop_adjustment') && visibleShopIds.includes(c.shopId));
+    if (!canApproveCount) return { ok: false, error: 'Not authorized to approve' };
     if (!user) return { ok: false, error: 'Not signed in' };
 
     const ts = Date.now();
@@ -1031,7 +1033,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     writeDoc(COL.counts, id, deepSanitize(approved as unknown as Record<string, unknown>),
       () => setStockCounts((prev) => prev.map((x) => (x.id === id ? approved : x))));
     return { ok: true };
-  }, [stockCounts, variants, balances, user, writeDoc]);
+  }, [stockCounts, variants, balances, user, writeDoc, visibleShopIds]);
 
   const rejectCount = useCallback((id: string, note: string) => {
     const c = stockCounts.find((x) => x.id === id);
@@ -1081,7 +1083,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const r = damageReports.find((x) => x.id === id);
     if (!r) return { ok: false, error: 'Report not found' };
     if (r.status !== 'pending') return { ok: false, error: 'Only pending reports can be approved' };
-    if (!can(user?.role, 'approve_adjustment')) return { ok: false, error: 'Not authorized' };
+    const canApproveDamage = can(user?.role, 'approve_adjustment')
+      || (can(user?.role, 'approve_own_shop_damage') && visibleShopIds.includes(r.shopId));
+    if (!canApproveDamage) return { ok: false, error: 'Not authorized' };
     if (!user) return { ok: false, error: 'Not signed in' };
     const variant = variants.find((v) => v.id === r.variantId);
     if (!variant) return { ok: false, error: 'Variant not found' };
@@ -1121,7 +1125,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const approved: DamageReport = { ...r, ...approvedFields } as DamageReport;
     setDamageReports((prev) => prev.map((x) => (x.id === id ? approved : x)));
     return { ok: true };
-  }, [damageReports, variants, user, settings.allowNegativeOverride, applyLocalMovement]);
+  }, [damageReports, variants, user, settings.allowNegativeOverride, applyLocalMovement, visibleShopIds]);
 
   const rejectDamageReport = useCallback((id: string, note: string) => {
     const r = damageReports.find((x) => x.id === id);

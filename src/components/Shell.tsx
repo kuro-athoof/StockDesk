@@ -13,11 +13,11 @@ const SECTIONS: NavSection[] = [
   {
     heading: 'Operations',
     items: [
-      { to: '/receiving',   label: 'Receive Stock',     icon: '📥', cap: 'receive_stock' },
-      { to: '/transfers',   label: 'Move Stock',         icon: '📤', cap: 'transfer_stock' },
-      { to: '/warehouse',   label: 'Warehouse Mode',     icon: '⬛', cap: 'transfer_stock' },
-      { to: '/damaged',     label: 'Damaged / Issues',   icon: '⚠️', cap: 'transfer_stock' },
-      { to: '/stock-count', label: 'Stock Count',        icon: '🔢', cap: 'perform_count' },
+      { to: '/receiving',   label: 'Receive Stock',   icon: '📥', cap: 'receive_stock' },
+      { to: '/transfers',   label: 'Move Stock',       icon: '📤', cap: 'transfer_stock' },
+      { to: '/warehouse',   label: 'Warehouse Mode',   icon: '⬛', cap: 'warehouse_mode' },
+      { to: '/damaged',     label: 'Damaged / Issues', icon: '⚠️', cap: 'perform_count' },
+      { to: '/stock-count', label: 'Stock Count',      icon: '🔢', cap: 'perform_count' },
     ],
   },
   {
@@ -37,13 +37,13 @@ const SECTIONS: NavSection[] = [
   },
 ];
 
-// Bottom nav items (mobile) — most-used ops
+// Bottom nav (mobile) — warehouse staff see Scan as primary; others see their ops
 const BOTTOM_NAV: NavItem[] = [
-  { to: '/',          label: 'Home',     icon: '⊞' },
-  { to: '/warehouse', label: 'Scan',     icon: '⬛', cap: 'transfer_stock' },
-  { to: '/receiving', label: 'Receive',  icon: '📥', cap: 'receive_stock' },
-  { to: '/transfers', label: 'Move',     icon: '📤', cap: 'transfer_stock' },
-  { to: '/stock',     label: 'Stock',    icon: '📦' },
+  { to: '/',          label: 'Home',    icon: '⊞' },
+  { to: '/warehouse', label: 'Scan',    icon: '⬛', cap: 'warehouse_mode' },
+  { to: '/receiving', label: 'Receive', icon: '📥', cap: 'receive_stock' },
+  { to: '/transfers', label: 'Move',    icon: '📤', cap: 'transfer_stock' },
+  { to: '/stock',     label: 'Stock',   icon: '📦' },
 ];
 
 export function Shell({ children }: { children: ReactNode }) {

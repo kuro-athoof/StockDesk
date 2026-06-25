@@ -15,6 +15,7 @@ service cloud.firestore {
     function assignedShops() { return userDoc().assignedShopIds; }
 
     function isAdmin()       { return signedIn() && isActive() && role() == 'admin'; }
+    function isOffice()      { return signedIn() && isActive() && role() == 'office'; }
     function isPurchaseMgr() { return signedIn() && isActive() && role() == 'purchase_manager'; }
     function isShopMgr()     { return signedIn() && isActive() && role() == 'shop_manager'; }
     function isWarehouse()   { return signedIn() && isActive() && role() == 'warehouse_staff'; }
@@ -22,15 +23,18 @@ service cloud.firestore {
 
     function canRead() { return signedIn() && isActive(); }
 
-    // Roles that may approve adjustments (damage write-off, stock-count corrections).
-    // Mirrors permissions.ts: only admin + purchase_manager hold 'approve_adjustment'.
-    // canApprove() maps to the approve_adjustment capability:
-    //   admin + purchase_manager only. shop_manager intentionally excluded —
-    //   UI does not grant shop_manager approve_adjustment, consistent here.
-    function canApprove() { return isAdmin() || isPurchaseMgr(); }
+    // canApprove(): approve_adjustment capability — any shop, admin / office / purchase_manager.
+    // shop_manager gets approve_own_shop_adjustment (scoped) — enforced per-document via canSeeShop.
+    function canApprove() { return isAdmin() || isOffice() || isPurchaseMgr(); }
 
-    // Roles that see every shop's data.
-    function seesAllShops() { return isAdmin() || isPurchaseMgr() || isAuditor(); }
+    // canApproveOwnShop(): approve adjustments for shops within assignedShopIds only.
+    // Used by shop_manager. Admin/office/purchase_manager already covered by canApprove().
+    function canApproveOwnShop(shopId) {
+      return canApprove() || (isShopMgr() && canSeeShop(shopId));
+    }
+
+    // Roles that see every shop's data (assignedShopIds is not restricting).
+    function seesAllShops() { return isAdmin() || isOffice() || isPurchaseMgr() || isAuditor(); }
 
     // True if the user may see data owned by `shopId`.
     function canSeeShop(shopId) {
@@ -74,10 +78,12 @@ service cloud.firestore {
     match /units/{id}         { allow read: if canRead(); allow write: if isAdmin(); }
     match /locations/{id}     { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
     match /suppliers/{id}     { allow read: if canRead(); allow write: if isAdmin() || isPurchaseMgr(); }
-    // Country rates are cost-sensitive: only cost-visible roles may read.
+    // Country rates are cost-sensitive (manage_country_rates capability = admin only).
+    // Read: roles with view_costs (admin, office, purchase_manager) + shop_manager (excluded per policy).
+    // Write: admin only. Office and purchase_manager can read but not change rates.
     match /country_rates/{id} {
-      allow read: if isAdmin() || isPurchaseMgr() || isShopMgr() || isAuditor();
-      allow write: if isAdmin() || isPurchaseMgr();
+      allow read: if isAdmin() || isOffice() || isPurchaseMgr() || isAuditor();
+      allow write: if isAdmin();
     }
     match /settings/{id}      { allow read: if canRead(); allow write: if isAdmin(); }
 
@@ -165,10 +171,9 @@ service cloud.firestore {
     // ─────────────────────────────────────────────────────────────────────────
     match /receivings/{id} {
       // P3: receivings contain FOB / cost / total-cost fields. Restrict reads to
-      // roles with view_costs (admin, purchase_manager, auditor, shop_manager) so
-      // warehouse_staff cannot query cost-bearing documents, even indirectly.
-      // An auditor who created the receiving may also read it (non-cost-sensitive).
-      allow read: if (isAdmin() || isPurchaseMgr() || isShopMgr() || isAuditor())
+      // roles with view_costs. Office and purchase_manager can review receivings;
+      // warehouse_staff cannot query cost-bearing documents.
+      allow read: if (isAdmin() || isOffice() || isPurchaseMgr() || isShopMgr() || isAuditor())
                    && canSeeShop(resource.data.ownerShopId);
       allow create: if (isAdmin() || isPurchaseMgr())
                      && canSeeShop(request.resource.data.ownerShopId)
@@ -219,7 +224,7 @@ service cloud.firestore {
     //   and the recorded approver must be the caller.
     // ─────────────────────────────────────────────────────────────────────────
     match /damage_reports/{id} {
-      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+      allow create: if (isAdmin() || isOffice() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(request.resource.data.shopId)
                      && request.resource.data.status == 'pending'
                      && nonNegNumber(request.resource.data, 'reportedQty')
@@ -229,8 +234,8 @@ service cloud.firestore {
                      // reporter identity must be the caller
                      && request.resource.data.reportedBy == request.auth.uid;
       allow read: if canRead() && canSeeShop(resource.data.shopId);
-      // Only Admin/PurchaseMgr can decide a report — and only from pending.
-      allow update: if canApprove()
+      // Approve/reject: admin, office, purchase_manager (any shop), or shop_manager (own shop only).
+      allow update: if canApproveOwnShop(resource.data.shopId)
                      && canSeeShop(resource.data.shopId)
                      && unchanged('shopId')
                      && unchanged('variantId')
@@ -255,26 +260,25 @@ service cloud.firestore {
     // ─────────────────────────────────────────────────────────────────────────
     match /stock_counts/{id} {
       allow read: if canRead() && canSeeShop(resource.data.shopId);
-      allow create: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+      allow create: if (isAdmin() || isOffice() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(request.resource.data.shopId)
                      && nonEmptyString(request.resource.data, 'shopId')
                      && request.resource.data.status in ['open', 'submitted'];
-      allow update: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+      allow update: if (isAdmin() || isOffice() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(resource.data.shopId)
                      && canSeeShop(request.resource.data.shopId)
                      && unchanged('shopId')
                      && (
-                          // staff edits + submit + recount cycle (open and rejected only).
+                          // Staff edits + submit + recount cycle (open and rejected only).
                           // Once submitted, only approvers may touch the document.
                           (
                             (resource.data.status == 'open' && request.resource.data.status in ['open', 'submitted', 'cancelled'])
                             || (resource.data.status == 'rejected' && request.resource.data.status in ['rejected', 'submitted'])
                             // P5: submitted records are LOCKED to non-approvers.
-                            // No field changes permitted while awaiting approval.
                           )
-                          // approval / rejection / reopen — approvers only
+                          // Approval / rejection / reopen — approvers or shop_manager for own shop
                           || (
-                            canApprove()
+                            canApproveOwnShop(resource.data.shopId)
                             && resource.data.status == 'submitted'
                             && request.resource.data.status in ['approved', 'rejected', 'open']
                             && (request.resource.data.status != 'approved'
@@ -283,8 +287,7 @@ service cloud.firestore {
                                  || request.resource.data.rejectedBy == request.auth.uid)
                           )
                      );
-      // Hard-delete only for open counts (not submitted/approved counts).
-      allow delete: if (isAdmin() || isPurchaseMgr() || isWarehouse() || isShopMgr())
+      allow delete: if (isAdmin() || isOffice() || isPurchaseMgr() || isWarehouse() || isShopMgr())
                      && canSeeShop(resource.data.shopId)
                      && resource.data.status == 'open';
     }

@@ -1,6 +1,6 @@
 // ============ StockDesk Pro — Core Types ============
 
-export type Role = 'admin' | 'purchase_manager' | 'shop_manager' | 'warehouse_staff' | 'auditor';
+export type Role = 'admin' | 'office' | 'purchase_manager' | 'shop_manager' | 'warehouse_staff' | 'auditor';
 
 export interface AppUser {
   uid: string;
@@ -171,6 +171,7 @@ export interface AuditLog {
 
 export const ROLE_LABELS: Record<Role, string> = {
   admin: 'Admin',
+  office: 'Office',
   purchase_manager: 'Purchase Manager',
   shop_manager: 'Shop Manager',
   warehouse_staff: 'Warehouse Staff',

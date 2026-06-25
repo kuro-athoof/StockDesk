@@ -190,7 +190,8 @@ function CountEditor({ count, onClose }: { count: Count | null; onClose: () => v
   const [includeZero, setIncludeZero] = useState(false);               // Fix 7: zero stock toggle
 
   const countNo    = count?.countNo ?? nextCountNo();
-  const isApprover = can(user?.role, 'approve_adjustment');
+  const isApprover = can(user?.role, 'approve_adjustment')
+    || (can(user?.role, 'approve_own_shop_adjustment') && visibleShopIds.includes(shopId));
   // Rejected counts can be re-edited and resubmitted.
   const readOnly   = count != null && count.status !== 'open' && count.status !== 'rejected';
 
