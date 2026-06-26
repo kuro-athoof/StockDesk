@@ -4,6 +4,9 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useStore } from '../context/StoreContext';
 
+import { can } from '../lib/permissions';
+import { buildLabelHtml, openPrintWindow, activeProfile } from '../lib/printLabel';
+import { BUILT_IN_PROFILES } from '../lib/demoData';
 import type { Variant } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -64,7 +67,7 @@ export function WarehouseMode() {
   const {
     user, variants, products, locations, visibleShopIds, shops, audit, settings,
     balanceOf, scopedBalances, shopName, productName, applyLocalMovement,
-    costHistory, saveCount, nextCountNo, createDamageReport, suppliers,
+    costHistory, saveCount, nextCountNo, createDamageReport, suppliers, labelSettings,
   } = useStore();
 
   const [shopId, setShopId]         = useState(visibleShopIds[0] ?? '');
@@ -141,7 +144,9 @@ export function WarehouseMode() {
     setMQty('');  // always start at 0 — never default to current stock
     setMUom(bal?.unit ?? found?.uom ?? 'Yard');
     setMNotes(''); setMDest(otherShops.find((s) => canSendToShop(s.id))?.id ?? otherShops[0]?.id ?? '');
-    setMReason(''); setMDmgReason(DAMAGE_REASONS[0]); setMPrint('1');
+    setMReason(''); setMDmgReason(DAMAGE_REASONS[0]);
+    const prof = activeProfile(labelSettings, BUILT_IN_PROFILES[0]);
+    setMPrint(String(prof.copiesDefault));
     setModal(m);
   };
   const closeModal = () => { setModal(null); refocus(); };
@@ -321,24 +326,31 @@ export function WarehouseMode() {
   const doPrint = () => {
     if (!found) return;
     const copies = parseInt(mPrint) || 1;
-    const win = window.open('', '_blank', 'width=420,height=350');
-    if (!win || win.closed) {
+    const b = balanceOf(found.id, shopId);
+    const showPriceAllowed = can(user?.role, 'view_costs');
+    const profile = activeProfile(labelSettings, BUILT_IN_PROFILES[0]);
+    const html = buildLabelHtml(
+      {
+        productName: productName(found.productId),
+        variantLabel: found.colorName ?? found.label,
+        ourColorNumber: found.ourColorNumber,
+        barcode: found.barcode,
+        shopName: shopName(shopId),
+        qty: b?.quantity,
+        uom: b?.unit ?? found.uom,
+        price: found.cost,
+        currency: 'MVR',
+      },
+      profile,
+      copies,
+      showPriceAllowed,
+    );
+    const ok = openPrintWindow(html);
+    if (!ok) {
       showToast('Popup blocked. Please allow popups or use browser print.', false);
       return;
     }
-    win.document.write(`<html><body style="font-family:monospace;font-size:16px;padding:20px">`);
-    for (let i = 0; i < copies; i++) {
-      win.document.write(`<div style="border:1px solid #ccc;padding:12px;margin-bottom:12px;page-break-inside:avoid">
-        <div style="font-size:18px;font-weight:bold">${productName(found.productId)}</div>
-        <div>${found.label}${found.ourColorNumber ? ' · #' + found.ourColorNumber : ''}</div>
-        <div style="font-size:22px;font-weight:bold;letter-spacing:4px;margin-top:8px">${found.barcode ?? ''}</div>
-        <div style="font-size:11px;color:#666">${shopName(shopId)}</div>
-      </div>`);
-    }
-    win.document.write('</body></html>');
-    win.document.close();
-    win.print();
-    showToast(`Label sent to printer ✓`);
+    showToast(`${copies} label${copies > 1 ? 's' : ''} sent to printer ✓`);
     closeModal();
   };
 
@@ -471,10 +483,11 @@ export function WarehouseMode() {
               {['1', '2', '3', '5', '10'].map((n) => (
                 <button key={n} onClick={() => setMPrint(n)}
                   className={`flex-1 rounded-xl py-3 text-sm font-bold ${mPrint === n ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700'}`}>
-                  {n}
+                  {n}{n === String(activeProfile(labelSettings, BUILT_IN_PROFILES[0]).copiesDefault) ? ' ★' : ''}
                 </button>
               ))}
             </div>
+            <p className="mt-1 text-[10px] text-gray-400">★ default from label settings · {activeProfile(labelSettings, BUILT_IN_PROFILES[0]).name}</p>
           </div>
           <button className="mt-5 w-full rounded-xl bg-purple-600 py-4 text-base font-bold text-white active:bg-purple-700" onClick={doPrint}>
             PRINT {mPrint} LABEL{parseInt(mPrint) > 1 ? 'S' : ''}

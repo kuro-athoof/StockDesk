@@ -100,6 +100,133 @@ export const DEMO_AUDIT: AuditLog[] = [
   { id: 'a9', timestamp: now - 200 * 86_400_000, userId: 'u_admin', userName: 'Ahmed Athoof', action: 'RECEIVE', productId: 'p_shawl', variantId: 'v_shawl', ownerShopId: 'shop_sindhitha', qtyBefore: 0, qtyChanged: 3, qtyAfter: 3, remarks: 'Invoice INV-2024-320 (dead stock)' },
 ];
 
+// ── Label / barcode printing ──────────────────────────────────────────────────
+
+export interface LabelProfile {
+  id: string;
+  name: string;
+  widthMm: number;
+  heightMm: number;
+  unit: 'mm' | 'in';
+  barcodeHeightMm: number;
+  barcodeWidthScale: number;   // 1.0–3.0, JsBarcode width option
+  fontSizePt: number;          // product name
+  variantFontSizePt: number;
+  barcodeFontSizePt: number;
+  priceFontSizePt: number;
+  topMarginMm: number;
+  leftMarginMm: number;
+  xOffsetMm: number;
+  yOffsetMm: number;
+  hGapMm: number;
+  vGapMm: number;
+  rotation: 0 | 90 | 180 | 270;
+  showBorder: boolean;
+  showProductName: boolean;
+  showVariant: boolean;
+  showBarcode: boolean;
+  showBarcodeText: boolean;
+  showQtyUom: boolean;
+  showPrice: boolean;          // double-gated with view_costs in UI
+  copiesDefault: number;
+}
+
+export interface LabelSettings {
+  activeProfileId: string;
+  profiles: LabelProfile[];
+}
+
+export const BUILT_IN_PROFILES: LabelProfile[] = [
+  {
+    id: 'zebra-50x30',    name: 'Zebra 50×30 mm',
+    widthMm: 50,          heightMm: 30,           unit: 'mm',
+    barcodeHeightMm: 12,  barcodeWidthScale: 2,
+    fontSizePt: 9,        variantFontSizePt: 8,   barcodeFontSizePt: 7,  priceFontSizePt: 8,
+    topMarginMm: 2,       leftMarginMm: 2,
+    xOffsetMm: 0,         yOffsetMm: 0,
+    hGapMm: 2,            vGapMm: 2,
+    rotation: 0,          showBorder: false,
+    showProductName: true, showVariant: true, showBarcode: true, showBarcodeText: true,
+    showQtyUom: false,    showPrice: false,   copiesDefault: 1,
+  },
+  {
+    id: 'zebra-40x20',    name: 'Zebra 40×20 mm',
+    widthMm: 40,          heightMm: 20,           unit: 'mm',
+    barcodeHeightMm: 8,   barcodeWidthScale: 1.5,
+    fontSizePt: 7,        variantFontSizePt: 6,   barcodeFontSizePt: 6,  priceFontSizePt: 7,
+    topMarginMm: 1,       leftMarginMm: 1,
+    xOffsetMm: 0,         yOffsetMm: 0,
+    hGapMm: 1,            vGapMm: 1,
+    rotation: 0,          showBorder: false,
+    showProductName: true, showVariant: true, showBarcode: true, showBarcodeText: true,
+    showQtyUom: false,    showPrice: false,   copiesDefault: 1,
+  },
+  {
+    id: 'zebra-60x40',    name: 'Zebra 60×40 mm',
+    widthMm: 60,          heightMm: 40,           unit: 'mm',
+    barcodeHeightMm: 16,  barcodeWidthScale: 2,
+    fontSizePt: 10,       variantFontSizePt: 9,   barcodeFontSizePt: 8,  priceFontSizePt: 9,
+    topMarginMm: 3,       leftMarginMm: 3,
+    xOffsetMm: 0,         yOffsetMm: 0,
+    hGapMm: 2,            vGapMm: 2,
+    rotation: 0,          showBorder: false,
+    showProductName: true, showVariant: true, showBarcode: true, showBarcodeText: true,
+    showQtyUom: false,    showPrice: false,   copiesDefault: 1,
+  },
+  {
+    id: 'a4-sheet',       name: 'A4 Sheet Label',
+    widthMm: 63.5,        heightMm: 38.1,         unit: 'mm',
+    barcodeHeightMm: 14,  barcodeWidthScale: 2,
+    fontSizePt: 9,        variantFontSizePt: 8,   barcodeFontSizePt: 7,  priceFontSizePt: 8,
+    topMarginMm: 3,       leftMarginMm: 3,
+    xOffsetMm: 0,         yOffsetMm: 0,
+    hGapMm: 2.5,          vGapMm: 0,
+    rotation: 0,          showBorder: true,
+    showProductName: true, showVariant: true, showBarcode: true, showBarcodeText: true,
+    showQtyUom: false,    showPrice: false,   copiesDefault: 1,
+  },
+  {
+    id: 'custom',         name: 'Custom',
+    widthMm: 50,          heightMm: 30,           unit: 'mm',
+    barcodeHeightMm: 12,  barcodeWidthScale: 2,
+    fontSizePt: 9,        variantFontSizePt: 8,   barcodeFontSizePt: 7,  priceFontSizePt: 8,
+    topMarginMm: 2,       leftMarginMm: 2,
+    xOffsetMm: 0,         yOffsetMm: 0,
+    hGapMm: 2,            vGapMm: 2,
+    rotation: 0,          showBorder: false,
+    showProductName: true, showVariant: true, showBarcode: true, showBarcodeText: true,
+    showQtyUom: false,    showPrice: false,   copiesDefault: 1,
+  },
+];
+
+export const DEFAULT_LABEL_SETTINGS: LabelSettings = {
+  activeProfileId: 'zebra-50x30',
+  profiles: BUILT_IN_PROFILES,
+};
+
+/** Migrate a legacy single-setting doc (v1) to the new profile-based structure. */
+export function migrateLegacyLabelSettings(raw: Record<string, unknown>): LabelSettings {
+  // If it already has profiles, it's v2 — return as-is.
+  if (raw.profiles && Array.isArray(raw.profiles)) return raw as unknown as LabelSettings;
+  // v1 flat object → inject into the Custom profile and activate it.
+  const custom = { ...BUILT_IN_PROFILES[4] };
+  if (typeof raw.widthMm === 'number')           custom.widthMm           = raw.widthMm;
+  if (typeof raw.heightMm === 'number')          custom.heightMm          = raw.heightMm;
+  if (typeof raw.barcodeHeightMm === 'number')   custom.barcodeHeightMm   = raw.barcodeHeightMm;
+  if (typeof raw.fontSizePt === 'number')        custom.fontSizePt        = raw.fontSizePt;
+  if (typeof raw.topMarginMm === 'number')       custom.topMarginMm       = raw.topMarginMm;
+  if (typeof raw.leftMarginMm === 'number')      custom.leftMarginMm      = raw.leftMarginMm;
+  if (typeof raw.copiesDefault === 'number')     custom.copiesDefault     = raw.copiesDefault;
+  if (typeof raw.showProductName === 'boolean')  custom.showProductName   = raw.showProductName;
+  if (typeof raw.showVariant === 'boolean')      custom.showVariant       = raw.showVariant;
+  if (typeof raw.showBarcode === 'boolean')      custom.showBarcode       = raw.showBarcode;
+  if (typeof raw.showBarcodeText === 'boolean')  custom.showBarcodeText   = raw.showBarcodeText;
+  if (typeof raw.showPrice === 'boolean')        custom.showPrice         = raw.showPrice;
+  const profiles = [...BUILT_IN_PROFILES];
+  profiles[4] = custom;
+  return { activeProfileId: 'custom', profiles };
+}
+
 export interface AppSettings {
   allowNegativeOverride: boolean;   // managers may override negative stock
   deadStockDays: number;            // no movement beyond this = dead stock

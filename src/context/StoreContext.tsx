@@ -10,12 +10,12 @@ import { can } from '../lib/permissions';
 import {
   DEMO_USERS, DEMO_SHOPS, DEMO_PRODUCTS, DEMO_VARIANTS, DEMO_BALANCES, DEMO_UNITS,
   DEMO_LOCATIONS, DEMO_SUPPLIERS, DEMO_RATES, DEMO_AUDIT, DEMO_CATEGORIES,
-  DEMO_SETTINGS, type AppSettings, loginByUid,
+  DEMO_SETTINGS, DEFAULT_LABEL_SETTINGS, migrateLegacyLabelSettings, type AppSettings, type LabelSettings, type LabelProfile, loginByUid,
 } from '../lib/demoData';
 import { balanceId, NegativeStockError, applyMovement, applyAtomicBatch, DuplicateOperationError, ConflictError, type MovementLineSpec } from '../lib/movement';
 import { suggestVariantBarcode, isBarcodeTaken } from '../lib/dataQuality';
 import { firebaseConfigured, auth, db, COL } from '../lib/firebase';
-import { repo, subscribe, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize } from '../lib/firestoreRepo';
+import { repo, subscribe, subscribeDoc, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize } from '../lib/firestoreRepo';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, runTransaction, collection } from 'firebase/firestore';
 
@@ -47,6 +47,9 @@ interface Store {
   logout: () => void;
   settings: AppSettings;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  labelSettings: LabelSettings;
+  updateLabelSettings: (patch: Partial<LabelSettings>) => void;
+  updateLabelProfile: (id: string, patch: Partial<LabelProfile>) => void;
 
   shops: Shop[];
   products: Product[];
@@ -152,6 +155,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [audit, setAudit] = useState<AuditLog[]>(LIVE ? [] : DEMO_AUDIT);
   const [categories, setCategories] = useState<string[]>(LIVE ? [] : DEMO_CATEGORIES);
   const [settings, setSettings] = useState<AppSettings>(DEMO_SETTINGS);
+  const [labelSettings, setLabelSettings] = useState<LabelSettings>(DEFAULT_LABEL_SETTINGS);
   const [receivings, setReceivings] = useState<Receiving[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [stockCounts, setStockCounts] = useState<StockCount[]>([]);
@@ -212,6 +216,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         repo.subscribeSuppliers(setSuppliers),
         repo.subscribeAudit(setAudit),
         repo.subscribeSettings((s) => s && setSettings(s)),
+        subscribeDoc<Record<string, unknown>>(COL.settings, 'label_print', (s) => s && setLabelSettings(migrateLegacyLabelSettings(s))),
         repo.subscribeCategories((c) => c && setCategories(c.values)),
         repo.subscribeTransfers(setTransfers),
         repo.subscribeCounts(setStockCounts),
@@ -252,6 +257,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (LIVE) upsert(COL.settings, 'app', { ...settings, ...p });
     else setSettings((s) => ({ ...s, ...p }));
   }, [settings]);
+
+  const updateLabelSettings = useCallback((p: Partial<LabelSettings>) => {
+    const next = { ...DEFAULT_LABEL_SETTINGS, ...labelSettings, ...p };
+    if (LIVE) upsert(COL.settings, 'label_print', next as unknown as Record<string, unknown>);
+    else setLabelSettings(next);
+  }, [labelSettings]);
+
+  const updateLabelProfile = useCallback((id: string, patch: Partial<LabelProfile>) => {
+    const profiles = labelSettings.profiles.map((p) => p.id === id ? { ...p, ...patch } : p);
+    const next: LabelSettings = { ...labelSettings, profiles };
+    if (LIVE) upsert(COL.settings, 'label_print', next as unknown as Record<string, unknown>);
+    else setLabelSettings(next);
+  }, [labelSettings]);
 
   const visibleShopIds = useMemo(() => {
     if (!user) return [];
@@ -1253,7 +1271,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<Store>(() => ({
-    user, users, demoMode: !LIVE, ready, login, loginWithEmail, logout, settings, updateSettings,
+    user, users, demoMode: !LIVE, ready, login, loginWithEmail, logout, settings, updateSettings, labelSettings, updateLabelSettings, updateLabelProfile,
     shops, products, variants, balances, units, locations, suppliers, rates, audit, categories,
     visibleShopIds, canSeeShop, scopedBalances,
     shopName, productName, supplierName, variantsOf, balanceOf, lastMovementOf,
@@ -1269,7 +1287,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     lastFobOf, recordCost,
     allBarcodes, isBarcodeUnique, findDuplicateProduct, findDuplicateVariant, generateBarcodeFor,
   }), [
-    user, users, ready, login, loginWithEmail, logout, settings, updateSettings,
+    user, users, ready, login, loginWithEmail, logout, settings, updateSettings, labelSettings, updateLabelSettings, updateLabelProfile,
     shops, products, variants, balances, units, locations, suppliers, rates, audit, categories,
     visibleShopIds, canSeeShop, scopedBalances,
     shopName, productName, supplierName, variantsOf, balanceOf, lastMovementOf,
