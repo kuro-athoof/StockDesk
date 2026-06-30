@@ -15,7 +15,7 @@ import {
 import { balanceId, NegativeStockError, applyMovement, applyAtomicBatch, DuplicateOperationError, ConflictError, type MovementLineSpec } from '../lib/movement';
 import { suggestVariantBarcode, isBarcodeTaken } from '../lib/dataQuality';
 import { firebaseConfigured, auth, db, COL } from '../lib/firebase';
-import { repo, subscribe, subscribeDoc, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize } from '../lib/firestoreRepo';
+import { repo, subscribe, subscribeDoc, seedIfEmpty, upsert, patch as fsPatch, remove as fsRemove, deepSanitize, normalizeAppUser } from '../lib/firestoreRepo';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc, runTransaction, collection } from 'firebase/firestore';
 
@@ -177,7 +177,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       try {
         const profileSnap = await getDoc(doc(db, COL.users, fbUser.uid));
         if (profileSnap.exists()) {
-          setUser({ uid: fbUser.uid, ...profileSnap.data() } as AppUser);
+          // normalizeAppUser guarantees assignedShopIds is always string[], even if
+          // the Firestore doc has a legacy string value, is missing the field, or
+          // has placeholder/malformed data. See firestoreRepo.ts for details.
+          setUser(normalizeAppUser(profileSnap.data(), fbUser.uid));
         } else {
           // Authenticated but no profile — cannot determine role; sign out state.
           setUser(null);

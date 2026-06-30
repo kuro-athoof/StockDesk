@@ -54,13 +54,16 @@ const MATRIX: Record<Role, Capability[]> = {
     'delete_records', 'request_stock', 'confirm_transfer',
   ],
 
-  // Office: full visibility, review-only. No warehouse scanning or stock operations.
+  // Office: full visibility, review-only. Supervises operations and reviews
+  // reports but does NOT perform warehouse scanning — no warehouse_mode.
   office: [
     'view_costs', 'view_reports', 'export_reports', 'view_notifications', 'review_operations',
     'approve_adjustment', 'approve_own_shop_damage',
   ],
 
-  // Purchase Manager: cost visibility, all reports, review ops. No warehouse mode.
+  // Purchase Manager: cost visibility, all reports, review ops. Supervises
+  // purchasing and receiving review but does NOT scan in the warehouse —
+  // no warehouse_mode.
   purchase_manager: [
     'manage_products', 'receive_stock', 'transfer_stock', 'adjust_stock', 'perform_count',
     'approve_adjustment', 'approve_own_shop_adjustment', 'approve_own_shop_damage',
@@ -72,8 +75,11 @@ const MATRIX: Record<Role, Capability[]> = {
   // Shop Manager: all daily ops, but scoped to assignedShopIds.
   // Can approve stock corrections and damage for their own shops.
   // Cannot manage users, country rates, or see other shops' data.
+  // Holds warehouse_mode: shop managers (Flora/Sindhitha) perform the day-to-day
+  // scanning, receiving, transfer, count and damage workflow themselves —
+  // this is the operational floor role for their own shop, not a review role.
   shop_manager: [
-    'receive_stock', 'transfer_stock', 'adjust_stock', 'perform_count',
+    'warehouse_mode', 'receive_stock', 'transfer_stock', 'adjust_stock', 'perform_count',
     'approve_own_shop_adjustment', 'approve_own_shop_damage',
     'approve_ownership_transfer', 'override_negative',
     'view_reports', 'view_notifications', 'confirm_transfer',

@@ -23,6 +23,32 @@ function reqDb(): Firestore {
   return db;
 }
 
+// ── User profile normalization ──────────────────────────────────────────────
+// Firestore is schemaless — a user document's `assignedShopIds` field may be:
+//   - missing entirely (older docs created before the field existed)
+//   - a single string instead of an array (manual console edits, old seed data)
+//   - a proper string[] (the correct shape)
+// Every permission check (`visibleShopIds.includes(...)`, `canSeeShop(...)`)
+// assumes `assignedShopIds` is always a string[]. This function is the ONE
+// place that raw Firestore data becomes a typed AppUser, so it is the single
+// point where malformed data is corrected before it reaches any comparison.
+// It does NOT touch Firestore — this is purely an in-memory read-time fix.
+export function normalizeAppUser(raw: Record<string, unknown>, uid: string): AppUser {
+  let assignedShopIds: string[];
+  const v = raw.assignedShopIds;
+  if (Array.isArray(v)) {
+    // Filter out any non-string entries defensively (e.g. nulls from bad writes).
+    assignedShopIds = v.filter((x): x is string => typeof x === 'string');
+  } else if (typeof v === 'string' && v.trim() !== '') {
+    // Legacy/placeholder docs stored a single shop ID as a bare string.
+    assignedShopIds = [v];
+  } else {
+    // Missing, null, empty string, or any other unexpected shape → safe default.
+    assignedShopIds = [];
+  }
+  return { ...raw, uid, assignedShopIds } as AppUser;
+}
+
 // ---- Generic realtime subscription. Returns an unsubscribe fn. ----
 export function subscribe<T>(
   collName: string,
@@ -110,7 +136,16 @@ export async function seedIfEmpty(): Promise<boolean> {
 
 // Type-safe wrappers used by the store
 export const repo = {
-  subscribeUsers: (cb: (r: AppUser[]) => void) => subscribe<AppUser>(COL.users, cb),
+  // Users get normalized on read — see normalizeAppUser() for why assignedShopIds
+  // must never be trusted as-is from Firestore.
+  subscribeUsers: (cb: (r: AppUser[]) => void): (() => void) => {
+    const q = query(collection(reqDb(), COL.users));
+    return onSnapshot(
+      q,
+      (snap) => cb(snap.docs.map((d) => normalizeAppUser(d.data(), d.id))),
+      (err) => console.error('[StockDesk] subscribeUsers failed:', err),
+    );
+  },
   subscribeShops: (cb: (r: Shop[]) => void) => subscribe<Shop>(COL.shops, cb),
   subscribeProducts: (cb: (r: Product[]) => void) => subscribe<Product>(COL.products, cb),
   subscribeVariants: (cb: (r: Variant[]) => void) => subscribe<Variant>(COL.variants, cb),
